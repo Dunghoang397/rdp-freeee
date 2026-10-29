@@ -1,4 +1,4 @@
-name: ZENOVA ULTIMATE VPS (Full Merge)
+name: ZENOVA ULTIMATE VPS
 on:
   workflow_dispatch:
     inputs:
@@ -16,7 +16,7 @@ on:
           - '3h'
           - '5h00m'
       windows_image:
-        description: '🪟 Bản Windows (Win 19/22/25)'
+        description: '🪟 Bản Windows'
         required: true
         default: 'windows-2022'
         type: choice
@@ -88,7 +88,7 @@ jobs:
 
     steps:
       # =========================================================================
-      # PHẦN 1: KHỞI TẠO Ổ ĐĨA & THÔNG SỐ
+      # PHẦN 1: DỰNG Ổ ĐĨA & LẤY THÔNG SỐ
       # =========================================================================
       - name: 🧱 Dựng ổ đĩa riêng & Chuẩn bị thông số
         shell: pwsh
@@ -109,7 +109,7 @@ jobs:
           $total = if ("$env:INPUT_DURATION" -eq '1h') { 60 } elseif ("$env:INPUT_DURATION" -eq '3h') { 180 } else { 300 }
           "TOTAL_MINUTES=$total" >> "$env:GITHUB_ENV"
 
-          # Đổi user thành zenova thay vì runneradmin
+          # Đổi user thành zenova
           $user = "zenova"
           $profPath = "C:\Users\zenova"
           "RDP_USER=$user" >> "$env:GITHUB_ENV";
@@ -225,7 +225,7 @@ jobs:
           Set-Content -Path "$saveScriptPath" -Value ($scriptLines -join "`r`n") -Encoding UTF8;
 
       # =========================================================================
-      # PHẦN 3: KHÔI PHỤC DỮ LIỆU TỪ GITHUB
+      # PHẦN 3: KHÔI PHỤC DỮ LIỆU
       # =========================================================================
       - name: ♻️ Khôi phục ổ đĩa
         shell: pwsh
@@ -287,7 +287,6 @@ jobs:
           $user = "zenova"
           $pass = "${{ inputs.fixed_password }}"
 
-          # Tạo user zenova nếu chưa có
           $userExists = Get-LocalUser -Name "$user" -ErrorAction SilentlyContinue
           if (-not ($userExists)) {
               New-LocalUser -Name "$user" -Password (ConvertTo-SecureString "$pass" -AsPlainText -Force) -FullName "Zenova" -Description "Zenova User"
@@ -297,7 +296,7 @@ jobs:
               & net user "$user" "$pass" /active:yes /expires:never *> $null
           }
 
-          # Tắt dịch vụ gây lag
+          # Fix lag
           Set-Service -Name WSearch -StartupType Disabled -ErrorAction SilentlyContinue; Stop-Service -Name WSearch -Force -ErrorAction SilentlyContinue;
           Set-Service -Name SysMain -StartupType Disabled -ErrorAction SilentlyContinue; Stop-Service -Name SysMain -Force -ErrorAction SilentlyContinue;
           Set-Service -Name wuauserv -StartupType Disabled -ErrorAction SilentlyContinue; Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue;
@@ -309,13 +308,13 @@ jobs:
           Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service -Name TermService -ErrorAction SilentlyContinue;
           netsh advfirewall firewall add rule name="ALL-IN" dir=in action=allow protocol=any profile=any | Out-Null;
 
-          # Tắt Auto-Logon (Bắt buộc nhập mật khẩu)
+          # Bắt buộc nhập mật khẩu
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'AutoAdminLogon' -Value 0 -Force;
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'DefaultPassword' -Value "" -Force;
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name 'DefaultUserName' -Value "" -Force;
 
       # =========================================================================
-      # PHẦN 5: CÀI TAILSCALE & LẤY IP
+      # PHẦN 5: TAILSCALE
       # =========================================================================
       - name: 🌐 Cài Tailscale
         shell: pwsh
@@ -368,7 +367,7 @@ jobs:
       # =========================================================================
       # PHẦN 7: CÀI APP & HÌNH NỀN
       # =========================================================================
-      - name: 📦 Cài App & Hình Nền (Chạy Ngầm)
+      - name: 📦 Cài App & Hình Nền (Background)
         shell: pwsh
         run: |
           Start-Job -ScriptBlock {
@@ -385,13 +384,11 @@ jobs:
                   Set-ItemProperty -Path "$regPath" -Name 'NoChangingWallPaper' -Value 1 -Type DWord
               } catch {}
 
-              # Cài app qua choco
               choco install discord -y --no-progress --limit-output
               choco install spotify -y --no-progress --limit-output
               choco install evkey -y --no-progress --limit-output
               choco install bandicam -y --no-progress --limit-output
 
-              # Tải & Cài StarDesk
               $installerUrl = 'https://download943.mediafire.com/be95vz5kgnig_m7acKGr-mRjXQQKAN0i2WdjIR_d-q70MeLboolFJnUHit6ZmqJYm8_rJigOgY0P5NhtdANnLGXOaEmKg9eWSEUGCEEIZdCrV2NNZ0ubdEO1hyPHR6l2Re85XT5kJpCd3Q4GXpeU0ZD2QSr5gc_6aPfM7r15_YltcA/mf82krdrzcy3dz8/StarDesk_1.5.3.exe'
               $installerPath = [System.IO.Path]::Combine("$env:USERPROFILE", 'Downloads', 'StarDesk.exe')
               New-Item -ItemType Directory -Force -Path (Split-Path "$installerPath") | Out-Null
@@ -404,7 +401,7 @@ jobs:
           } | Out-Null
 
       # =========================================================================
-      # PHẦN 8: TẠO WEB QUẢN LÝ VPS & NGẮT VPS
+      # PHẦN 8: WEB QUẢN LÝ VPS
       # =========================================================================
       - name: 🌐 Web Quản Lý & Ngắt VPS
         shell: pwsh
@@ -432,7 +429,7 @@ jobs:
           Start-Process pwsh.exe -ArgumentList '-NoProfile', '-WindowStyle', 'Hidden', '-File', "`"$webScript`""
 
       # =========================================================================
-      # PHẦN 9: GIỮ MÁY CHẠY & TỰ KHỞI ĐỘNG LẠI
+      # PHẦN 9: GIỮ MÁY CHẠY
       # =========================================================================
       - name: ⏳ Giữ Máy Chạy
         id: keepalive
