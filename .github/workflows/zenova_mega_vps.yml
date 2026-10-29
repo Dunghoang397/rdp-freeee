@@ -1,9 +1,9 @@
-name: ZENOVA ULTIMATE VPS (Full Features)
+name: ZENOVA COSMIC VPS (Siêu Tốc - Chạy Ngầm)
 on:
   workflow_dispatch:
     inputs:
       machine_id:
-        description: '🏷️ Tên định danh máy (VD: zenova-1)'
+        description: '🏷️ Tên định danh máy'
         required: true
         default: 'zenova-1'
       duration:
@@ -16,7 +16,7 @@ on:
           - '3h'
           - '5h00m'
       windows_image:
-        description: '🪟 Bản Windows (Windows 2022/2025)'
+        description: '🪟 Bản Windows'
         required: true
         default: 'windows-2022'
         type: choice
@@ -24,34 +24,20 @@ on:
           - 'windows-2022'
           - 'windows-2025'
       fixed_password:
-        description: '🔐 Mật khẩu RDP & Sunshine'
+        description: '🔐 Mật khẩu RDP'
         required: false
         default: 'Aistv@2026'
-      vdd_resolution:
-        description: '🖥️ Độ phân giải màn hình ảo'
-        required: false
-        default: '1920x1080@60'
-        type: choice
-        options:
-          - '1920x1080@60'
-          - '2560x1440@60'
-          - '3840x2160@60'
-      auto_restart:
-        description: '🔁 Tự khởi động lại khi hết giờ'
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: write
   actions: write
 
 concurrency:
-  group: zenova-ultimate-${{ inputs.machine_id }}
+  group: zenova-cosmic-${{ inputs.machine_id }}
   cancel-in-progress: false
 
 jobs:
-  Zenova-Ultimate-Setup:
+  Zenova-Cosmic-Setup:
     runs-on: ${{ inputs.windows_image }}
     timeout-minutes: 355
 
@@ -59,16 +45,13 @@ jobs:
       GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
       GH_REPO: ${{ github.repository }}
       MACHINE_ID: ${{ inputs.machine_id || 'zenova-1' }}
-      DRIVE_LETTER: 'X'
-      VHD_SIZE_GB: '45'
       WEB_PORT: '8080'
-      SUNSHINE_WEB_PORT: '47990'
 
     steps:
       # =========================================================================
-      # PHẦN 1: KHỞI TẠO Ổ ĐĨA ẢO VÀ CHUẨN BỊ THƯ MỤC
+      # PHẦN 1: KHỞI TẠO Ổ ĐĨA ẢO (CHẠY SIÊU TỐC)
       # =========================================================================
-      - name: 🧱 Dựng ổ đĩa riêng X:\ & Chuẩn bị thông số
+      - name: 🧱 Dựng ổ đĩa X:\ & Chuẩn bị
         shell: pwsh
         env:
           INPUT_DURATION: ${{ inputs.duration }}
@@ -78,29 +61,23 @@ jobs:
 
           $cleanId = (("$env:MACHINE_ID").Trim().ToLower() -replace '[^a-z0-9\-]', '-') -replace '\-+', '-' -replace '^\-|\-$', '';
           if ([string]::IsNullOrWhiteSpace("$cleanId")) { $cleanId = 'zenova-1' }
-          $relTag = "zenova-storage-$cleanId"
-          $stateBranch = "zenova-state-$cleanId"
           "MACHINE_ID=$cleanId" >> "$env:GITHUB_ENV"
-          "RELEASE_TAG=$relTag" >> "$env:GITHUB_ENV"
-          "STATE_BRANCH=$stateBranch" >> "$env:GITHUB_ENV"
+          "RELEASE_TAG=zenova-storage-$cleanId" >> "$env:GITHUB_ENV"
 
           $total = if ("$env:INPUT_DURATION" -eq '1h') { 60 } elseif ("$env:INPUT_DURATION" -eq '3h') { 180 } else { 300 }
           "TOTAL_MINUTES=$total" >> "$env:GITHUB_ENV"
 
-          $user = "$env:USERNAME";
-          $profPath = "$env:USERPROFILE";
-          "RDP_USER=$user" >> "$env:GITHUB_ENV";
-          "PROFILE_PATH=$profPath" >> "$env:GITHUB_ENV";
+          "RDP_USER=$env:USERNAME" >> "$env:GITHUB_ENV"
+          "PROFILE_PATH=$env:USERPROFILE" >> "$env:GITHUB_ENV"
 
-          $vhdContainer = 'C:\ZENOVA-VHD-HOST';
+          $vhdContainer = 'C:\ZENOVA-VHD';
           New-Item -ItemType Directory -Force -Path "$vhdContainer" | Out-Null;
           $vhdFile = [System.IO.Path]::Combine("$vhdContainer", 'zenova-os.vhdx');
 
-          $sizeBytes = ([int64]"$env:VHD_SIZE_GB") * 1GB;
           $mounted = $false;
           try {
               if (-not (Test-Path "$vhdFile")) {
-                  New-VHD -Path "$vhdFile" -SizeBytes ($sizeBytes) -Dynamic | Mount-VHD -PassThru | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -DriveLetter "X" -UseMaximumSize | Format-Volume -FileSystem NTFS -NewFileSystemLabel 'ZENOVA-OS' -Confirm:($false) | Out-Null;
+                  New-VHD -Path "$vhdFile" -SizeBytes (45GB) -Dynamic | Mount-VHD -PassThru | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -DriveLetter "X" -UseMaximumSize | Format-Volume -FileSystem NTFS -NewFileSystemLabel 'ZENOVA-OS' -Confirm:($false) | Out-Null;
               } else { Mount-VHD -Path "$vhdFile"; }
               $null = Get-PSDrive -Name "X" -ErrorAction Stop;
               $mounted = $true;
@@ -110,183 +87,46 @@ jobs:
               $fallbackDir = [System.IO.Path]::Combine("$vhdContainer", 'VIRTUAL-DRIVE-ROOT');
               New-Item -ItemType Directory -Force -Path "$fallbackDir" | Out-Null;
               & subst "X:" "$fallbackDir";
-              Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\DOS Devices' -Name "X:" -Value "\??\$fallbackDir" -Type String -Force;
           }
 
           $sharedRoot = "X:\ZENOVA-SYSTEM";
-          $sharedSessionDir = "$sharedRoot\sessions";
-          $sharedDataDir = "$sharedRoot\DATA";
-          $sharedOsDir = "$sharedRoot\OS-OVERLAY";
-          $sharedStateFile = "$sharedSessionDir\rdp-session-state.json";
-          $profileStoreRoot = "$sharedRoot\Users";
-          $baselineFile = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'baseline-c-dirs.json');
-          $controlSignal = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'zenova-control-action.txt');
+          @("$sharedRoot", "$sharedRoot\sessions", "$sharedRoot\DATA", "$sharedRoot\OS-OVERLAY", "$sharedRoot\Users") | ForEach-Object { New-Item -ItemType Directory -Force -Path "$_" | Out-Null }
 
-          @("$sharedRoot", "$sharedSessionDir", "$sharedDataDir", "$sharedOsDir", "$profileStoreRoot", "X:\Apps") | ForEach-Object { New-Item -ItemType Directory -Force -Path "$_" | Out-Null }
-
-          $baseline = @{
-              PF64 = @(Get-ChildItem 'C:\Program Files' -Directory -Force -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name);
-              PF86 = @(Get-ChildItem 'C:\Program Files (x86)' -Directory -Force -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name);
-              PD   = @(Get-ChildItem 'C:\ProgramData' -Directory -Force -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name);
-          };
-          $baseline | ConvertTo-Json -Depth 4 | Set-Content -Path "$baselineFile" -Encoding UTF8;
-
-          "VHD_CONTAINER=$vhdContainer" >> "$env:GITHUB_ENV";
-          "VHD_FILE=$vhdFile" >> "$env:GITHUB_ENV";
           "SHARED_ROOT=$sharedRoot" >> "$env:GITHUB_ENV";
-          "SHARED_SESSION_DIR=$sharedSessionDir" >> "$env:GITHUB_ENV";
-          "SHARED_DATA_DIR=$sharedDataDir" >> "$env:GITHUB_ENV";
-          "SHARED_OS_DIR=$sharedOsDir" >> "$env:GITHUB_ENV";
-          "SHARED_STATE_FILE=$sharedStateFile" >> "$env:GITHUB_ENV";
-          "PROFILE_ROOT=$profileStoreRoot" >> "$env:GITHUB_ENV";
-          "BASELINE_FILE=$baselineFile" >> "$env:GITHUB_ENV";
-          "CONTROL_SIGNAL_FILE=$controlSignal" >> "$env:GITHUB_ENV";
-
-          $build = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').CurrentBuild;
-          "OS_BUILD=$build" >> "$env:GITHUB_ENV";
+          "SHARED_OS_DIR=$sharedRoot\OS-OVERLAY" >> "$env:GITHUB_ENV";
+          "CONTROL_SIGNAL_FILE=$env:RUNNER_TEMP\zenova-control-action.txt" >> "$env:GITHUB_ENV";
 
           $null = gh release view "$env:RELEASE_TAG" --repo "$env:GH_REPO" 2>&1;
           if (($LASTEXITCODE) -ne 0) {
               $dummy = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'init.txt');
-              Set-Content -Path "$dummy" -Value "Zenova Storage Initialized" -Encoding UTF8;
+              Set-Content -Path "$dummy" -Value "Zenova" -Encoding UTF8;
               gh release create "$env:RELEASE_TAG" "$dummy" --repo "$env:GH_REPO" --title "Zenova Storage ($cleanId)" --notes "Auto persistent drive";
           }
           $global:LASTEXITCODE = 0;
 
       # =========================================================================
-      # PHẦN 2: TẠO SCRIPT LƯU TRỮ TỰ ĐỘNG (DATA SYNC)
+      # PHẦN 2: KHÔI PHỤC & TỐI ƯU HỆ THỐNG NGAY LẬP TỨC
       # =========================================================================
-      - name: 🧰 Tạo script lưu trữ ổ đĩa
+      - name: ⚙️ Tối ưu Windows & Khôi phục (Siêu tốc)
         shell: pwsh
         run: |
-          $scriptLines = @(
-              'param([string]$Reason = "session-end")',
-              '$ErrorActionPreference = "Continue";',
-              'if (("$env:DATA_RESTORED" -ne "1") -or ("$env:SESSION_READY" -ne "1")) { exit 0; }',
-              '$root  = "$env:SHARED_ROOT";',
-              '$osDir = "$env:SHARED_OS_DIR";',
-              '$appsToClose = @("chrome", "msedge", "discord", "Spotify", "StarDesk", "Code");',
-              'Get-Process -Name $appsToClose -ErrorAction SilentlyContinue | ForEach-Object { $null = $_.CloseMainWindow(); };',
-              'Start-Sleep -Seconds 3;',
-              'Get-Process -Name $appsToClose -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;',
-              '$regBk = [System.IO.Path]::Combine("$osDir", "Registry");',
-              'New-Item -ItemType Directory -Force -Path "$regBk" | Out-Null;',
-              'reg export "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" "$regBk\Uninstall-x64.reg" /y *> $null;',
-              'reg export "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "$regBk\System-Env.reg" /y *> $null;',
-              'reg export "HKLM\SOFTWARE\Microsoft\Cryptography" "$regBk\Machine-Cryptography.reg" /y *> $null;',
-              'reg export "HKCU\Control Panel\Desktop" "$regBk\User-Desktop.reg" /y *> $null;',
-              'reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes" "$regBk\User-Themes.reg" /y *> $null;',
-              'reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers" "$regBk\User-Wallpapers.reg" /y *> $null;',
-              'if (("$env:RDP_USER") -and ("$env:PROFILE_PATH") -and (Test-Path "$env:PROFILE_PATH")) {',
-              '    $profDst = [System.IO.Path]::Combine("$root", "Users", "$env:RDP_USER");',
-              '    New-Item -ItemType Directory -Force -Path "$profDst" | Out-Null;',
-              '    robocopy "$env:PROFILE_PATH" "$profDst" /MIR /XJ /R:1 /W:1 /MT:8 /NFL /NDL /NJH /NJS /NP /XF NTUSER.DAT* ntuser.ini UsrClass.dat* /XD "$env:PROFILE_PATH\AppData\Roaming\Microsoft\Protect" "$env:PROFILE_PATH\AppData\Local\Temp" *> $null;',
-              '    $global:LASTEXITCODE = 0;',
-              '}',
-              '$packDir = [System.IO.Path]::Combine("$env:RUNNER_TEMP", "gh-pack");',
-              'if (Test-Path "$packDir") { Remove-Item -Path "$packDir" -Recurse -Force -ErrorAction SilentlyContinue; }',
-              'New-Item -ItemType Directory -Force -Path "$packDir" | Out-Null;',
-              '$archiveBase = [System.IO.Path]::Combine("$packDir", "zenova-drive.7z");',
-              'Push-Location "$root";',
-              '& 7z a -t7z -mx=1 -mmt=on -ssw -v1900m "$archiveBase" "*" "-xr!Pagefile.sys" "-xr!swapfile.sys" *> $null;',
-              'Pop-Location;',
-              '$chunks = @(Get-ChildItem -Path "$packDir" -Filter "zenova-drive.7z.*" | Sort-Object Name);',
-              'if (($chunks.Count) -eq 0) { exit 1; }',
-              '$manifest = [ordered]@{ machineId = "$env:MACHINE_ID"; updatedUtc = (Get-Date).ToUniversalTime().ToString("o"); chunkCount = $chunks.Count; };',
-              '$manifestPath = [System.IO.Path]::Combine("$packDir", "drive-manifest.json");',
-              '$manifest | ConvertTo-Json | Set-Content -Path "$manifestPath" -Encoding UTF8;',
-              '$uploadFiles = @($chunks | ForEach-Object { $_.FullName }) + @("$manifestPath");',
-              'gh release upload "$env:RELEASE_TAG" @uploadFiles --repo "$env:GH_REPO" --clobber;',
-              'Remove-Item -Path "$packDir" -Recurse -Force -ErrorAction SilentlyContinue;',
-              'exit 0;'
-          );
-          $saveScriptPath = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'save-data.ps1');
-          Set-Content -Path "$saveScriptPath" -Value ($scriptLines -join "`r`n") -Encoding UTF8;
-
-      # =========================================================================
-      # PHẦN 3: KHÔI PHỤC DỮ LIỆU TỪ GITHUB
-      # =========================================================================
-      - name: ♻️ Khôi phục ổ đĩa
-        shell: pwsh
-        run: |
-          @('HKLM:\SOFTWARE\Policies\Google\Chrome', 'HKLM:\SOFTWARE\Policies\Microsoft\Edge') | ForEach-Object {
-              New-Item -Path "$_" -Force | Out-Null; Set-ItemProperty -Path "$_" -Name 'ApplicationBoundEncryptionEnabled' -Value 0 -Type DWord -Force;
-          };
-
-          $dlDir = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'gh-restore');
-          if (Test-Path "$dlDir") { Remove-Item -Path "$dlDir" -Recurse -Force -ErrorAction SilentlyContinue; }
-          New-Item -ItemType Directory -Force -Path "$dlDir" | Out-Null;
-
-          gh release download "$env:RELEASE_TAG" --repo "$env:GH_REPO" --pattern 'drive-manifest.json' --dir "$dlDir" 2>$null;
-          $manifestFile = [System.IO.Path]::Combine("$dlDir", 'drive-manifest.json');
-
-          if (-not (Test-Path "$manifestFile")) {
-              'DATA_RESTORED=1' >> "$env:GITHUB_ENV";
-              exit 0;
-          }
-
-          gh release download "$env:RELEASE_TAG" --repo "$env:GH_REPO" --pattern 'zenova-drive.7z.*' --dir "$dlDir";
-          $firstChunk = [System.IO.Path]::Combine("$dlDir", 'zenova-drive.7z.001');
-          if (-not (Test-Path "$firstChunk")) { exit 1; }
-
-          $stage = [System.IO.Path]::Combine("$env:VHD_CONTAINER", 'restore-stage');
-          if (Test-Path "$stage") { Remove-Item -Path "$stage" -Recurse -Force -ErrorAction SilentlyContinue; }
-          New-Item -ItemType Directory -Force -Path "$stage" | Out-Null;
-
-          & 7z x "$firstChunk" "-o$stage" -y -mmt=on *> $null;
-          Remove-Item -Path "$dlDir" -Recurse -Force -ErrorAction SilentlyContinue;
-
-          $stateHit = Get-ChildItem -Path "$stage" -Recurse -Depth 6 -Filter 'rdp-session-state.json' -File -Force -ErrorAction SilentlyContinue | Select-Object -First 1;
-          $sourceRoot = if ($stateHit) { $stateHit.Directory.Parent.FullName } else { "$stage" };
-
-          robocopy "$sourceRoot" "$env:SHARED_ROOT" /E /XJ /R:1 /W:1 /MT:8 /NFL /NDL /NJH /NJS /NP *> $null;
-          $global:LASTEXITCODE = 0;
-
-          $oldProf = [System.IO.Path]::Combine("$env:SHARED_ROOT", 'Users', "$env:RDP_USER");
-          if (Test-Path "$oldProf") {
-              robocopy "$oldProf" "$env:PROFILE_PATH" /E /XJ /COPY:DAT /R:1 /W:1 /MT:8 /NFL /NDL /NJH /NJS /NP /XF NTUSER.DAT* ntuser.ini UsrClass.dat* /XD "$oldProf\AppData\Roaming\Microsoft\Protect" *> $null;
-              $global:LASTEXITCODE = 0;
-          }
-          Remove-Item -Path "$stage" -Recurse -Force -ErrorAction SilentlyContinue;
-
-          $regBk = [System.IO.Path]::Combine("$env:SHARED_OS_DIR", 'Registry');
-          if (Test-Path "$regBk") {
-              Get-ChildItem -Path "$regBk" -Filter '*.reg' -Recurse | ForEach-Object { reg import ($_.FullName) *>$null; };
-              & RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters 1, True;
-          }
-
-          'DATA_RESTORED=1' >> "$env:GITHUB_ENV";
-
-      # =========================================================================
-      # PHẦN 4: TỐI ƯU HỆ THỐNG, BẬT RDP
-      # =========================================================================
-      - name: ⚙️ Tối ưu Windows & Bật RDP
-        shell: pwsh
-        run: |
-          # Fix lag
+          # Tắt dịch vụ ngầm gây lag
           Set-Service -Name WSearch -StartupType Disabled -ErrorAction SilentlyContinue; Stop-Service -Name WSearch -Force -ErrorAction SilentlyContinue;
           Set-Service -Name SysMain -StartupType Disabled -ErrorAction SilentlyContinue; Stop-Service -Name SysMain -Force -ErrorAction SilentlyContinue;
           Set-Service -Name wuauserv -StartupType Disabled -ErrorAction SilentlyContinue; Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue;
-          Set-Service -Name Spooler -StartupType Disabled -ErrorAction SilentlyContinue; Stop-Service -Name Spooler -Force -ErrorAction SilentlyContinue;
 
-          # Bật RDP
+          # Bật RDP & Firewall
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force;
           Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service -Name TermService -ErrorAction SilentlyContinue;
-          
-          # Mở Firewall
-          netsh advfirewall firewall add rule name="RDP-IN" dir=in action=allow protocol=TCP localport=3389 profile=any | Out-Null;
-          netsh advfirewall firewall add rule name="WEB-IN" dir=in action=allow protocol=TCP localport=8080 profile=any | Out-Null;
-          netsh advfirewall firewall add rule name="SUNSHINE-TCP" dir=in action=allow protocol=TCP localport=47984-48010 profile=any | Out-Null;
-          netsh advfirewall firewall add rule name="SUNSHINE-UDP" dir=in action=allow protocol=UDP localport=47984-48010 profile=any | Out-Null;
+          netsh advfirewall firewall add rule name="ALL-IN" dir=in action=allow protocol=any profile=any | Out-Null;
 
-          # Set Password
+          # Đặt pass
           $u = $env:RDP_USER
           net user $u "${{ inputs.fixed_password }}" /active:yes /expires:never | Out-Null
           Add-LocalGroupMember -Group "Administrators" -Member $u -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -ErrorAction SilentlyContinue
 
       # =========================================================================
-      # PHẦN 5: CÀI TAILSCALE
+      # PHẦN 3: CÀI TAILSCALE & LẤY IP (BƯỚC QUYẾT ĐỊNH ĐỂ KẾT NỐI)
       # =========================================================================
       - name: 🌐 Cài Tailscale
         shell: pwsh
@@ -294,7 +134,6 @@ jobs:
           $msiPath = "$env:TEMP\tailscale.msi"
           Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile $msiPath -UseBasicParsing
           Start-Process msiexec.exe -ArgumentList "/i", "`"$msiPath`"", "/quiet", "/norestart" -Wait
-          Start-Sleep -Seconds 3
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
           Set-Service -Name "Tailscale" -StartupType Automatic; Start-Service -Name "Tailscale"
           Start-Sleep -Seconds 2
@@ -302,48 +141,16 @@ jobs:
           $ip = (& "$ts" ip -4 | Out-String).Trim()
           "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
 
-      # =========================================================================
-      # PHẦN 6: CÀI DRIVER ẢO & SUNSHINE
-      # =========================================================================
-      - name: 🖥️🔊☀️ Cài Driver Ảo & Sunshine
-        shell: pwsh
-        env:
-          VDD_RES: ${{ inputs.vdd_resolution }}
-        run: |
-          # 1. Cài màn hình ảo
-          $vddDir = "C:\usbmmidd_v2"
-          if (-not (Test-Path "$vddDir")) {
-              Invoke-WebRequest -Uri 'https://www.amyuni.com/downloads/usbmmidd_v2.zip' -OutFile "$env:TEMP\usbmmidd_v2.zip" -UseBasicParsing
-              Expand-Archive -Path "$env:TEMP\usbmmidd_v2.zip" -DestinationPath 'C:\' -Force
-          }
-          if (Test-Path "$vddDir\deviceinstaller64.exe") {
-              Push-Location "$vddDir"
-              Get-ChildItem -Filter '*.cer' | ForEach-Object { Import-Certificate -FilePath ($_.FullName) -CertStoreLocation 'Cert:\LocalMachine\Root' *>$null; }
-              & .\deviceinstaller64.exe install usbmmidd.inf usbmmidd *> $null
-              & .\deviceinstaller64.exe enableidd 1 *> $null
-              Pop-Location
-          }
-
-          # 2. Cài âm thanh ảo
-          $vbDir = "C:\VBCable"
-          if (-not (Test-Path "$vbDir")) {
-              Invoke-WebRequest -Uri 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip' -OutFile "$env:TEMP\VBCable.zip" -UseBasicParsing
-              Expand-Archive -Path "$env:TEMP\VBCable.zip" -DestinationPath "$vbDir" -Force
-          }
-          $vbInf = Get-ChildItem -Path "$vbDir" -Filter '*.inf' -Recurse | Select-Object -First 1
-          if ($vbInf) { pnputil /add-driver ($vbInf.FullName) /install *> $null }
-
-          # 3. Cài Sunshine
-          choco install sunshine -y --no-progress --limit-output --ignore-checksums
-          $global:LASTEXITCODE = 0
-          $sunExe = "C:\Program Files\Sunshine\sunshine.exe"
-          if (Test-Path "$sunExe") {
-              Set-Service -Name 'SunshineService' -StartupType Automatic -ErrorAction SilentlyContinue
-              Start-Service -Name 'SunshineService' -ErrorAction SilentlyContinue
-          }
+          Write-Host "┌────────────────────────────────────────────────────┐" -ForegroundColor Cyan
+          Write-Host "│ 🚀 VPS SẴN SÀNG! KẾT NỐI NGAY BÂY GIỜ!           │" -ForegroundColor Cyan
+          Write-Host "│ 🌐 IP Tailscale : $ip                             │" -ForegroundColor White
+          Write-Host "│ 👤 User         : $env:RDP_USER                  │" -ForegroundColor White
+          Write-Host "│ 🔑 Password     : ${{ inputs.fixed_password }}   │" -ForegroundColor White
+          Write-Host "└────────────────────────────────────────────────────┘" -ForegroundColor Cyan
+          Write-Host "⏳ Các tác vụ cài App, Driver, Sunshine đang chạy ngầm. Mày cứ vào dùng RDP trước!" -ForegroundColor Yellow
 
       # =========================================================================
-      # PHẦN 7: TẠO WEB QUẢN LÝ & NGẮT VPS
+      # PHẦN 4: TẠO WEB QUẢN LÝ (CHẠY NGẦM)
       # =========================================================================
       - name: 🌐 Web Quản Lý & Ngắt VPS
         shell: pwsh
@@ -358,107 +165,52 @@ jobs:
               '  if ($req.HttpMethod -eq "POST" -and $req.Url.AbsolutePath.ToLower() -eq "/stop") {'
               '    Start-Process "shutdown.exe" -ArgumentList "/s /t 0";'
               '  }'
-              '  if ($req.HttpMethod -eq "POST" -and $req.Url.AbsolutePath.ToLower() -eq "/restart") {'
-              '    Set-Content -Path "$env:CONTROL_SIGNAL_FILE" -Value "RESTART_SESSION" -Encoding UTF8;'
-              '  }'
-              '  $html = "<html><body><h1>ZENOVA ULTIMATE VPS</h1><p>IP: $($env:TAILSCALE_IP)</p><p>User: $($env:RDP_USER)</p><p>Pass: ${{ inputs.fixed_password }}</p><br><form method=''POST'' action=''/restart''><button style=''padding:20px;background:orange;color:white;''>LƯU & KHỞI ĐỘNG LẠI</button></form><br><form method=''POST'' action=''/stop''><button style=''padding:20px;background:red;color:white;''>LƯU & NGẮT VPS</button></form></body></html>";'
+              '  $html = "<html><body><h1>ZENOVA VPS</h1><p>IP: $($env:TAILSCALE_IP)</p><p>Pass: ${{ inputs.fixed_password }}</p><form method=''POST'' action=''/stop''><button style=''padding:20px;background:red;color:white;''>NGẮT VPS</button></form></body></html>";'
               '  $buf = [System.Text.Encoding]::UTF8.GetBytes("$html");'
               '  $resp.ContentType = "text/html; charset=utf-8"; $resp.ContentLength64 = $buf.Length;'
               '  $resp.OutputStream.Write($buf, 0, $buf.Length); $resp.OutputStream.Close();'
               '}'
           )
           Set-Content -Path "$webScript" -Value ($lines -join "`r`n") -Encoding UTF8
-          Start-Process pwsh.exe -ArgumentList '-NoProfile', '-WindowStyle', 'Hidden', '-File', "`"$webScript`""
-
-          Write-Host "┌────────────────────────────────────────────────────┐" -ForegroundColor Cyan
-          Write-Host "│ 🚀 VPS ĐÃ SẴN SÀNG!                              │" -ForegroundColor Cyan
-          Write-Host "│ 🌐 IP Tailscale : $env:TAILSCALE_IP               │" -ForegroundColor White
-          Write-Host "│ 👤 User         : $env:RDP_USER                  │" -ForegroundColor White
-          Write-Host "│ 🔑 Password     : ${{ inputs.fixed_password }}   │" -ForegroundColor White
-          Write-Host "│ 🎛️ Web Quản lý  : http://$($env:TAILSCALE_IP):8080 │" -ForegroundColor Yellow
-          Write-Host "└────────────────────────────────────────────────────┘" -ForegroundColor Cyan
+          Start-Process pwsh.exe -ArgumentList '-NoProfile', '-WindowStyle', 'Hidden', '-File', "`"$webScript`"" -PassThru
 
       # =========================================================================
-      # PHẦN 8: CÀI APP & HÌNH NỀN (CHẠY NGẦM)
+      # PHẦN 5: CHẠY NGẦM SIÊU TỐC (DRIVER ẢO, SUNSHINE, APP, WALLPAPER)
       # =========================================================================
-      - name: 📦 Cài App & Hình Nền (Chạy Ngầm)
+      - name: 🚀 Kích hoạt Tiến Trình Ngầm (Zero-Lag)
         shell: pwsh
         run: |
-          Start-Job -ScriptBlock {
-              # Tải & Đặt hình nền từ link Raw GitHub của mày
-              $wallpaperUrl = "https://raw.githubusercontent.com/Dunghoang397/rdp-freeee/main/Zenova%20Cloud%20Aurora%20Lake.png"
-              $wallpaperPath = "C:\Windows\Web\Wallpaper\Zenova.png"
-              try {
-                  Invoke-WebRequest -Uri "$wallpaperUrl" -OutFile "$wallpaperPath" -UseBasicParsing -ErrorAction SilentlyContinue
-                  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value "$wallpaperPath"
-                  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name WallpaperStyle -Value "10"
-                  RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters
-                  
-                  $regPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\ActiveDesktop'
-                  New-Item -Path "$regPath" -Force | Out-Null
-                  Set-ItemProperty -Path "$regPath" -Name 'NoChangingWallPaper' -Value 1 -Type DWord
-              } catch {}
-
-              # Cài Discord & Spotify
-              choco install discord -y --no-progress --limit-output --ignore-checksums
-              choco install spotify -y --no-progress --limit-output --ignore-checksums
-
-              # Cài StarDesk
-              $installerUrl = 'https://download943.mediafire.com/be95vz5kgnig_m7acKGr-mRjXQQKAN0i2WdjIR_d-q70MeLboolFJnUHit6ZmqJYm8_rJigOgY0P5NhtdANnLGXOaEmKg9eWSEUGCEEIZdCrV2NNZ0ubdEO1hyPHR6l2Re85XT5kJpCd3Q4GXpeU0ZD2QSr5gc_6aPfM7r15_YltcA/mf82krdrzcy3dz8/StarDesk_1.5.3.exe'
-              $installerPath = [System.IO.Path]::Combine("$env:USERPROFILE", 'Downloads', 'StarDesk.exe')
-              New-Item -ItemType Directory -Force -Path (Split-Path "$installerPath") | Out-Null
-              Invoke-WebRequest -Uri "$installerUrl" -OutFile "$installerPath" -UseBasicParsing -ErrorAction SilentlyContinue
-              if (Test-Path "$installerPath") {
-                  Start-Process -FilePath "$installerPath" -ArgumentList '/S' -Wait
-                  Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Set-Service -StartupType Automatic
-                  Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Start-Service
-              }
-          } | Out-Null
+          # Tạo file script riêng để chạy ngầm, không block luồng chính
+          $bgScript = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'background-setup.ps1')
+          $bgLines = @(
+              'Start-Sleep -Seconds 10 # Chờ mày vào máy'
+              '# 1. Cài Driver Ảo & Sunshine'
+              'Start-Process pwsh.exe -ArgumentList "-NoProfile", "-Command", "& { $vdd = ''C:\usbmmidd_v2''; if (-not (Test-Path $vdd)) { Invoke-WebRequest -Uri ''https://www.amyuni.com/downloads/usbmmidd_v2.zip'' -OutFile ''$env:TEMP\usbmmidd_v2.zip''; Expand-Archive -Path ''$env:TEMP\usbmmidd_v2.zip'' -DestinationPath ''C:\'' -Force }; Push-Location $vdd; Get-ChildItem -Filter ''*.cer'' | ForEach-Object { Import-Certificate -FilePath ($_.FullName) -CertStoreLocation ''Cert:\LocalMachine\Root'' }; & .\deviceinstaller64.exe install usbmmidd.inf usbmmidd; & .\deviceinstaller64.exe enableidd 1; Pop-Location; choco install sunshine -y --no-progress; choco install vb-cable -y --no-progress }" -WindowStyle Hidden'
+              '# 2. Cài App & Wallpaper'
+              'Start-Process pwsh.exe -ArgumentList "-NoProfile", "-Command", "& { $wpUrl = ''https://raw.githubusercontent.com/Dunghoang397/rdp-freeee/main/Zenova%20Cloud%20Aurora%20Lake.png''; $wpPath = ''C:\Windows\Web\Wallpaper\Zenova.png''; Invoke-WebRequest -Uri $wpUrl -OutFile $wpPath; Set-ItemProperty -Path ''HKCU:\Control Panel\Desktop'' -Name Wallpaper -Value $wpPath; Set-ItemProperty -Path ''HKCU:\Control Panel\Desktop'' -Name WallpaperStyle -Value ''10''; RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters; New-Item -Path ''HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\ActiveDesktop'' -Force | Out-Null; Set-ItemProperty -Path ''HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\ActiveDesktop'' -Name NoChangingWallPaper -Value 1; choco install discord -y --no-progress; choco install spotify -y --no-progress }" -WindowStyle Hidden'
+              '# 3. Cài StarDesk'
+              'Start-Process pwsh.exe -ArgumentList "-NoProfile", "-Command", "& { $url = ''https://download943.mediafire.com/be95vz5kgnig_m7acKGr-mRjXQQKAN0i2WdjIR_d-q70MeLboolFJnUHit6ZmqJYm8_rJigOgY0P5NhtdANnLGXOaEmKg9eWSEUGCEEIZdCrV2NNZ0ubdEO1hyPHR6l2Re85XT5kJpCd3Q4GXpeU0ZD2QSr5gc_6aPfM7r15_YltcA/mf82krdrzcy3dz8/StarDesk_1.5.3.exe''; $path = ''C:\temp\StarDesk.exe''; New-Item -ItemType Directory -Force -Path ''C:\temp''; Invoke-WebRequest -Uri $url -OutFile $path; Start-Process -FilePath $path -ArgumentList ''/S'' -Wait; Start-Sleep -Seconds 5; Get-Service -Name ''*StarDesk*'' | Set-Service -StartupType Automatic; Get-Service -Name ''*StarDesk*'' | Start-Service }" -WindowStyle Hidden'
+          )
+          Set-Content -Path "$bgScript" -Value ($bgLines -join "`r`n") -Encoding UTF8
+          Start-Process pwsh.exe -ArgumentList '-NoProfile', '-WindowStyle', 'Hidden', '-File', "`"$bgScript`"" -PassThru
 
       # =========================================================================
-      # PHẦN 9: DUY TRÌ PHIÊN & TỰ KHỞI ĐỘNG LẠI
+      # PHẦN 6: GIỮ MÁY CHẠY VÀ TỰ ĐỘNG KHỞI ĐỘNG LẠI
       # =========================================================================
       - name: ⏳ Giữ Máy Chạy
         id: keepalive
         shell: pwsh
         run: |
           $endEpoch = ([long]"$env:JOB_START_EPOCH") + (([long]"$env:TOTAL_MINUTES") * 60)
-          $sigFile = "$env:CONTROL_SIGNAL_FILE"
-          while ($true) {
-              if (Test-Path "$sigFile") {
-                  $cmd = (Get-Content -Raw -Path "$sigFile").Trim()
-                  Remove-Item -Path "$sigFile" -Force -ErrorAction SilentlyContinue
-                  if ("$cmd" -eq 'STOP_SESSION') {
-                      'FORCE_STOP_ONLY=1' >> "$env:GITHUB_ENV"
-                      break
-                  }
-                  if ("$cmd" -eq 'RESTART_SESSION') {
-                      'FORCE_NEXT_SESSION=1' >> "$env:GITHUB_ENV"
-                      break
-                  }
-              }
-              $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-              if (($endEpoch - $now) -le 0) { break }
-              Start-Sleep -Seconds 5
+          while ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() -lt $endEpoch) {
+              Start-Sleep -Seconds 60
           }
 
       # =========================================================================
-      # PHẦN 10: LƯU & DỌN DẸP
-      # =========================================================================
-      - name: 💾 Lưu & Dọn Dẹp cuối phiên
-        if: always()
-        shell: pwsh
-        run: |
-          $saveScript = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'save-data.ps1')
-          if (Test-Path "$saveScript") { & "$saveScript" -Reason 'session-end' }
-          Stop-Service -Name 'Tailscale' -Force -ErrorAction SilentlyContinue
-          Stop-Process -Name 'StarDesk*' -Force -ErrorAction SilentlyContinue
-
-      # =========================================================================
-      # PHẦN 11: KHỞI ĐỘNG PHIÊN MỚI
+      # PHẦN 7: KẾT THÚC VÀ KHỞI ĐỘNG PHIÊN MỚI
       # =========================================================================
       - name: 🔁 Kích hoạt phiên tiếp theo
-        if: ${{ always() && steps.keepalive.outcome == 'success' && env.FORCE_STOP_ONLY != '1' }}
+        if: ${{ always() && steps.keepalive.outcome == 'success' }}
         shell: pwsh
         env:
           DURATION: ${{ inputs.duration }}
