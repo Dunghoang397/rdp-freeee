@@ -423,7 +423,7 @@ jobs:
       - name: 🖼️ Áp dụng Hình Nền Zenova (Khóa không cho đổi)
         shell: pwsh
         run: |
-          $wallpaperUrl = "https://i.imgur.com/your_zenova_wallpaper.jpg" # Thay link ảnh mày gửi vào đây
+          $wallpaperUrl = "https://raw.githubusercontent.com/Dunghoang397/rdp-freeee/2715203b1462985959767187a585efb637441f9f/Zenova%20Cloud%20Aurora%20Lake.png" # Thay link ảnh mày gửi vào đây
           $wallpaperPath = "C:\Windows\Web\Wallpaper\Zenova.jpg"
           
           # Tải ảnh
