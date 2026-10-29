@@ -16,7 +16,7 @@ on:
           - '3h'
           - '5h00m'
       windows_image:
-        description: '🪟 Bản Windows'
+        description: '🪟 Bản Windows (Win 19/22/25)'
         required: true
         default: 'windows-2022'
         type: choice
