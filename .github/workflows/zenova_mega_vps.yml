@@ -1081,6 +1081,9 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       # 11. KHỞI CHẠY WEB QUẢN LÝ VPS (PORT 8080)
       # ─────────────────────────────────────────────────────────────
+      # ─────────────────────────────────────────────────────────────
+      # 11. KHỞI CHẠY WEB QUẢN LÝ VPS (PORT 8080)
+      # ─────────────────────────────────────────────────────────────
       - name: 🌐 Khởi chạy Web Quản Lý VPS (Port 8080)
         shell: pwsh
         run: |
@@ -1091,115 +1094,14 @@ jobs:
           New-Item -ItemType Directory -Force -Path $webDir -ErrorAction SilentlyContinue | Out-Null;
           $webScript = [System.IO.Path]::Combine($webDir, 'server.ps1');
 
-          $srvLines = @(
-              'param([int]$Port = 8080, [string]$SignalFile = "")',
-              '$listener = New-Object System.Net.HttpListener;',
-              '$listener.Prefixes.Add("http://*:" + $Port + "/");',
-              '$listener.Start();',
-              'while ($listener.IsListening) {',
-              '    $ctx = $listener.GetContext();',
-              '    $req = $ctx.Request;',
-              '    $res = $ctx.Response;',
-              '    $res.Headers.Add("Access-Control-Allow-Origin", "*");',
-              '    $path = $req.Url.AbsolutePath.ToLower();',
-              '    if ($req.HttpMethod -eq "POST") {',
-              '        $cmd = "";',
-              '        if ($path -eq "/stop") { $cmd = "STOP_SESSION"; }',
-              '        elseif ($path -eq "/restart") { $cmd = "RESTART_SESSION"; }',
-              '        elseif ($path -eq "/save") { $cmd = "SAVE_NOW"; }',
-              '        else {',
-              '            $sr = New-Object System.IO.StreamReader($req.InputStream);',
-              '            $body = $sr.ReadToEnd();',
-              '            try { $cmd = ($body | ConvertFrom-Json).cmd; } catch { $cmd = $body; }',
-              '        }',
-              '        if ($cmd) {',
-              '            Set-Content -Path $SignalFile -Value $cmd.Trim() -Encoding UTF8;',
-              '            $json = ''{"ok":true,"message":"Da nhan lenh: '' + $cmd.Trim() + ''"}'';',
-              '            $b = [System.Text.Encoding]::UTF8.GetBytes($json);',
-              '            $res.ContentType = "application/json; charset=utf-8";',
-              '            $res.OutputStream.Write($b, 0, $b.Length);',
-              '            $res.Close();',
-              '            continue;',
-              '        }',
-              '    }',
-              '    $tsIp = if ($env:TAILSCALE_IP) { $env:TAILSCALE_IP } else { "127.0.0.1" };',
-              '    $pass = if ($env:FIXED_PASSWORD) { $env:FIXED_PASSWORD } else { "Zenova@2026" };',
-              '    $sdId = if (Test-Path "C:\stardesk-id.txt") { (Get-Content "C:\stardesk-id.txt" -Raw).Trim() } else { "Đang lấy ID..." };',
-              '    $sdPin = if (Test-Path "C:\stardesk-pin.txt") { (Get-Content "C:\stardesk-pin.txt" -Raw).Trim() } else { "Zenova2026" };',
-              '    $cfWeb = if (Test-Path "C:\cloudflared-web-url.txt") { (Get-Content "C:\cloudflared-web-url.txt" -Raw).Trim() } else { "" };',
-              '    $cfSun = if (Test-Path "C:\cloudflared-sunshine-url.txt") { (Get-Content "C:\cloudflared-sunshine-url.txt" -Raw).Trim() } else { "" };',
-              '    $html = @"',
-              '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Zenova Cloud VPS Control Panel</title>',
-              '<meta name="viewport" content="width=device-width,initial-scale=1">',
-              '<style>',
-              'body{background:#090d16;color:#f3f4f6;font-family:system-ui,-apple-system,sans-serif;margin:0;padding:20px;display:flex;justify-content:center}',
-              '.card{width:100%;max-width:850px;background:#111827;border:1px solid #1f2937;border-radius:16px;padding:24px;box-shadow:0 20px 25px -5px rgba(0,0,0,0.5)}',
-              '.header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1f2937;padding-bottom:16px;margin-bottom:20px}',
-              '.badge{background:#065f46;color:#34d399;padding:6px 14px;border-radius:9999px;font-weight:700;font-size:12px;letter-spacing:0.5px}',
-              '.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-bottom:24px}',
-              '.box{background:#1f2937;border:1px solid #374151;border-radius:12px;padding:16px;position:relative}',
-              '.box h3{margin-top:0;font-size:16px;color:#38bdf8;display:flex;align-items:center;gap:8px}',
-              '.code{background:#111827;padding:6px 10px;border-radius:6px;font-family:monospace;font-size:14px;color:#facc15;font-weight:bold;display:inline-block;margin-top:4px}',
-              '.btn-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}',
-              'button{padding:14px;border:none;border-radius:10px;font-weight:700;font-size:14px;cursor:pointer;transition:0.2s;display:flex;align-items:center;justify-content:center;gap:8px;color:#fff}',
-              '.btn-save{background:#0284c7}.btn-save:hover{background:#0369a1}',
-              '.btn-rst{background:#d97706}.btn-rst:hover{background:#b45309}',
-              '.btn-stop{background:#dc2626}.btn-stop:hover{background:#b91c1c}',
-              '.btn-tscon{background:#4f46e5}.btn-tscon:hover{background:#4338ca}',
-              'a{color:#38bdf8;text-decoration:none}',
-              'a:hover{text-decoration:underline}',
-              '</style></head><body><div class="card">',
-              '<div class="header">',
-              '<div><h2 style="margin:0;font-size:22px">🚀 ZENOVA ULTIMATE VPS</h2><p style="margin:4px 0 0;color:#9ca3af;font-size:13px">Máy: <b>' + "$env:DISPLAY_NAME" + ' (' + "$env:MACHINE_ID" + ')</b></p></div>',
-              '<span class="badge">● ONLINE & ĐANG CHẠY</span>',
-              '</div>',
-              '<div class="grid">',
-              '<div class="box" style="border-left:4px solid #f59e0b">',
-              '<h3>🌟 1. StarDesk Trung (Khuyên Dùng)</h3>',
-              '<p style="margin:6px 0;font-size:13px;color:#d1d5db">Không cần mở port, 60fps mượt mà:</p>',
-              'ID: <span class="code">' + $sdId + '</span><br>',
-              'PIN: <span class="code">' + $sdPin + '</span>',
-              '</div>',
-              '<div class="box" style="border-left:4px solid #10b981">',
-              '<h3>☀️ 2. Sunshine & Moonlight Stream</h3>',
-              '<p style="margin:6px 0;font-size:13px;color:#d1d5db">Web UI Sunshine:</p>',
-              (if ($cfSun) { '<a href="' + $cfSun + '" target="_blank" style="font-weight:bold;font-size:13px">🔗 Mở Sunshine Web UI (Cloudflare)</a><br>' } else { '<span style="color:#9ca3af;font-size:13px">Local: https://127.0.0.1:47990</span><br>' }) +',
-              'User: <span class="code">zenova</span><br>',
-              'Pass: <span class="code">' + $pass + '</span>',
-              '</div>',
-              '<div class="box" style="border-left:4px solid #3b82f6">',
-              '<h3>🖥️ 3. Windows Remote Desktop</h3>',
-              '<p style="margin:6px 0;font-size:13px;color:#d1d5db">IP: <span class="code">' + $tsIp + ':3389</span></p>',
-              'User: <span class="code">zenova</span><br>',
-              'Pass: <span class="code">' + $pass + '</span>',
-              '</div>',
-              '</div>',
-              (if ($cfWeb) { '<div style="background:#1e293b;padding:12px;border-radius:8px;margin-bottom:20px;font-size:13px;border:1px solid #334155">🌐 Link Public Web Quản Lý (Mọi Nơi): <a href="' + $cfWeb + '" target="_blank" style="font-weight:bold">' + $cfWeb + '</a></div>' } else { '' }) +',
-              '<div class="btn-group">',
-              '<button class="btn-save" onclick="sendCmd(''SAVE_NOW'')">💾 LƯU DỮ LIỆU NGAY</button>',
-              '<button class="btn-rst" onclick="sendCmd(''RESTART_SESSION'')">🔁 RESET PHIÊN MỚI</button>',
-              '<button class="btn-stop" onclick="sendCmd(''STOP_SESSION'')">🛑 NGẮT VPS</button>',
-              '</div>',
-              '</div><script>',
-              'async function sendCmd(c){ if(confirm("Xác nhận thực hiện lệnh: "+c+"?")){ let r=await fetch("/api/cmd",{method:"POST",body:JSON.stringify({cmd:c})}); let d=await r.json(); alert(d.message); } }',
-              'setTimeout(()=>{ location.reload(); }, 15000);',
-              '</script></body></html>',
-              '"@;',
-              '    $b = [System.Text.Encoding]::UTF8.GetBytes($html);',
-              '    $res.ContentType = "text/html; charset=utf-8";',
-              '    $res.OutputStream.Write($b, 0, $b.Length);',
-              '    $res.Close();',
-              '}'
-          );
-          Set-Content -Path $webScript -Value ($srvLines -join "`r`n") -Encoding UTF8;
+          $b64 = 'cGFyYW0oW2ludF0kUG9ydCA9IDgwODAsIFtzdHJpbmddJFNpZ25hbEZpbGUgPSAiIikKCiRsaXN0ZW5lciA9IE5ldy1PYmplY3QgU3lzdGVtLk5ldC5IdHRwTGlzdGVuZXIKJGxpc3RlbmVyLlByZWZpeGVzLkFkZCgiaHR0cDovLyo6IiArICRQb3J0ICsgIi8iKQokbGlzdGVuZXIuU3RhcnQoKQoKd2hpbGUgKCRsaXN0ZW5lci5Jc0xpc3RlbmluZykgewogICAgdHJ5IHsKICAgICAgICAkY3R4ID0gJGxpc3RlbmVyLkdldENvbnRleHQoKQogICAgICAgICRyZXEgPSAkY3R4LlJlcXVlc3QKICAgICAgICAkcmVzID0gJGN0eC5SZXNwb25zZQogICAgICAgICRyZXMuSGVhZGVycy5BZGQoIkFjY2Vzcy1Db250cm9sLUFsbG93LU9yaWdpbiIsICIqIikKICAgICAgICAkcGF0aCA9ICRyZXEuVXJsLkFic29sdXRlUGF0aC5Ub0xvd2VyKCkKCiAgICAgICAgaWYgKCRyZXEuSHR0cE1ldGhvZCAtZXEgIlBPU1QiKSB7CiAgICAgICAgICAgICRjbWQgPSAiIgogICAgICAgICAgICBpZiAoJHBhdGggLWVxICIvc3RvcCIpIHsgJGNtZCA9ICJTVE9QX1NFU1NJT04iIH0KICAgICAgICAgICAgZWxzZWlmICgkcGF0aCAtZXEgIi9yZXN0YXJ0IikgeyAkY21kID0gIlJFU1RBUlRfU0VTU0lPTiIgfQogICAgICAgICAgICBlbHNlaWYgKCRwYXRoIC1lcSAiL3NhdmUiKSB7ICRjbWQgPSAiU0FWRV9OT1ciIH0KICAgICAgICAgICAgZWxzZSB7CiAgICAgICAgICAgICAgICAkc3IgPSBOZXctT2JqZWN0IFN5c3RlbS5JTy5TdHJlYW1SZWFkZXIoJHJlcS5JbnB1dFN0cmVhbSkKICAgICAgICAgICAgICAgICRib2R5ID0gJHNyLlJlYWRUb0VuZCgpCiAgICAgICAgICAgICAgICB0cnkgeyAkY21kID0gKCRib2R5IHwgQ29udmVydEZyb20tSnNvbikuY21kIH0gY2F0Y2ggeyAkY21kID0gJGJvZHkgfQogICAgICAgICAgICB9CiAgICAgICAgICAgIGlmICgkY21kKSB7CiAgICAgICAgICAgICAgICBpZiAoJFNpZ25hbEZpbGUpIHsgU2V0LUNvbnRlbnQgLVBhdGggJFNpZ25hbEZpbGUgLVZhbHVlICRjbWQuVHJpbSgpIC1FbmNvZGluZyBVVEY4IH0KICAgICAgICAgICAgICAgICRqc29uID0gJ3sib2siOnRydWUsIm1lc3NhZ2UiOiLEkMOjIG5o4bqtbiBs4buHbmg6ICcgKyAkY21kLlRyaW0oKSArICcifScKICAgICAgICAgICAgICAgICRiID0gW1N5c3RlbS5UZXh0LkVuY29kaW5nXTo6VVRGOC5HZXRCeXRlcygkanNvbikKICAgICAgICAgICAgICAgICRyZXMuQ29udGVudFR5cGUgPSAiYXBwbGljYXRpb24vanNvbjsgY2hhcnNldD11dGYtOCIKICAgICAgICAgICAgICAgICRyZXMuT3V0cHV0U3RyZWFtLldyaXRlKCRiLCAwLCAkYi5MZW5ndGgpCiAgICAgICAgICAgICAgICAkcmVzLkNsb3NlKCkKICAgICAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgICAgIH0KICAgICAgICB9CgogICAgICAgICR0c0lwID0gaWYgKCRlbnY6VEFJTFNDQUxFX0lQKSB7ICRlbnY6VEFJTFNDQUxFX0lQIH0gZWxzZSB7ICIxMjcuMC4wLjEiIH0KICAgICAgICAkcGFzcyA9IGlmICgkZW52OkZJWEVEX1BBU1NXT1JEKSB7ICRlbnY6RklYRURfUEFTU1dPUkQgfSBlbHNlIHsgIlplbm92YUAyMDI2IiB9CiAgICAgICAgJHNkSWQgPSBpZiAoVGVzdC1QYXRoICJDOlxzdGFyZGVzay1pZC50eHQiKSB7IChHZXQtQ29udGVudCAiQzpcc3RhcmRlc2staWQudHh0IiAtUmF3KS5UcmltKCkgfSBlbHNlIHsgIsSQYW5nIGzhuqV5IElELi4uIiB9CiAgICAgICAgJHNkUGluID0gaWYgKFRlc3QtUGF0aCAiQzpcc3RhcmRlc2stcGluLnR4dCIpIHsgKEdldC1Db250ZW50ICJDOlxzdGFyZGVzay1waW4udHh0IiAtUmF3KS5UcmltKCkgfSBlbHNlIHsgIlplbm92YTIwMjYiIH0KICAgICAgICAkY2ZXZWIgPSBpZiAoVGVzdC1QYXRoICJDOlxjbG91ZGZsYXJlZC13ZWItdXJsLnR4dCIpIHsgKEdldC1Db250ZW50ICJDOlxjbG91ZGZsYXJlZC13ZWItdXJsLnR4dCIgLVJhdykuVHJpbSgpIH0gZWxzZSB7ICIiIH0KICAgICAgICAkY2ZTdW4gPSBpZiAoVGVzdC1QYXRoICJDOlxjbG91ZGZsYXJlZC1zdW5zaGluZS11cmwudHh0IikgeyAoR2V0LUNvbnRlbnQgIkM6XGNsb3VkZmxhcmVkLXN1bnNoaW5lLXVybC50eHQiIC1SYXcpLlRyaW0oKSB9IGVsc2UgeyAiIiB9CiAgICAgICAgJGRpc3BOYW1lID0gaWYgKCRlbnY6RElTUExBWV9OQU1FKSB7ICRlbnY6RElTUExBWV9OQU1FIH0gZWxzZSB7ICJaZW5vdmEgTWFjaGluZSIgfQogICAgICAgICRtYWNoSWQgPSBpZiAoJGVudjpNQUNISU5FX0lEKSB7ICRlbnY6TUFDSElORV9JRCB9IGVsc2UgeyAiemVub3ZhLTEiIH0KCiAgICAgICAgJHN1bkxpbmsgPSBpZiAoJGNmU3VuKSB7ICI8YSBocmVmPVwiIiArICRjZlN1biArICJcIiB0YXJnZXQ9XCJfYmxhbmtcIiBzdHlsZT1cImZvbnQtd2VpZ2h0OmJvbGQ7Zm9udC1zaXplOjEzcHg7Y29sb3I6IzM4YmRmOFwiPvCflJcgTeG7nyBTdW5zaGluZSBXZWIgVUkgKENsb3VkZmxhcmUpPC9hPjxicj4iIH0gZWxzZSB7ICI8c3BhbiBzdHlsZT1cImNvbG9yOiM5Y2EzYWY7Zm9udC1zaXplOjEzcHhcIj5Mb2NhbDogaHR0cHM6Ly8xMjcuMC4wLjE6NDc5OTA8L3NwYW4+PGJyPiIgfQogICAgICAgICR3ZWJCYW5uZXIgPSBpZiAoJGNmV2ViKSB7ICI8ZGl2IHN0eWxlPVwiYmFja2dyb3VuZDojMWUyOTNiO3BhZGRpbmc6MTJweDtib3JkZXItcmFkaXVzOjhweDttYXJnaW4tYm90dG9tOjIwcHg7Zm9udC1zaXplOjEzcHg7Ym9yZGVyOjFweCBzb2xpZCAjMzM0MTU1XCI+8J+MkCBMaW5rIFB1YmxpYyBXZWIgUXXhuqNuIEzDvTogPGEgaHJlZj1cIiIgKyAkY2ZXZWIgKyAiXCIgdGFyZ2V0PVwiX2JsYW5rXCIgc3R5bGU9XCJmb250LXdlaWdodDpib2xkO2NvbG9yOiMzOGJkZjhcIj4iICsgJGNmV2ViICsgIjwvYT48L2Rpdj4iIH0gZWxzZSB7ICIiIH0KCiAgICAgICAgJGh0bWwgPSBAIgo8IURPQ1RZUEUgaHRtbD48aHRtbD48aGVhZD48bWV0YSBjaGFyc2V0PSJ1dGYtOCI+PHRpdGxlPlplbm92YSBDbG91ZCBWUFMgQ29udHJvbCBQYW5lbDwvdGl0bGU+CjxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsaW5pdGlhbC1zY2FsZT0xIj4KPHN0eWxlPgpib2R5e2JhY2tncm91bmQ6IzA5MGQxNjtjb2xvcjojZjNmNGY2O2ZvbnQtZmFtaWx5OnN5c3RlbS11aSwtYXBwbGUtc3lzdGVtLHNhbnMtc2VyaWY7bWFyZ2luOjA7cGFkZGluZzoyMHB4O2Rpc3BsYXk6ZmxleDtqdXN0aWZ5LWNvbnRlbnQ6Y2VudGVyfQouY2FyZHt3aWR0aDoxMDAlO21heC13aWR0aDo4NTBweDtiYWNrZ3JvdW5kOiMxMTE4Mjc7Ym9yZGVyOjFweCBzb2xpZCAjMWYyOTM3O2JvcmRlci1yYWRpdXM6MTZweDtwYWRkaW5nOjI0cHg7Ym94LXNoYWRvdzowIDIwcHggMjVweCAtNXB4IHJnYmEoMCwwLDAsMC41KX0KLmhlYWRlcntkaXNwbGF5OmZsZXg7anVzdGlmeS1jb250ZW50OnNwYWNlLWJldHdlZW47YWxpZ24taXRlbXM6Y2VudGVyO2JvcmRlci1ib3R0b206MXB4IHNvbGlkICMxZjI5Mzc7cGFkZGluZy1ib3R0b206MTZweDttYXJnaW4tYm90dG9tOjIwcHh9Ci5iYWRnZXtiYWNrZ3JvdW5kOiMwNjVmNDY7Y29sb3I6IzM0ZDM5OTtwYWRkaW5nOjZweCAxNHB4O2JvcmRlci1yYWRpdXM6OTk5OXB4O2ZvbnQtd2VpZ2h0OjcwMDtmb250LXNpemU6MTJweDtsZXR0ZXItc3BhY2luZzowLjVweH0KLmdyaWR7ZGlzcGxheTpncmlkO2dyaWQtdGVtcGxhdGUtY29sdW1uczpyZXBlYXQoYXV0by1maXQsbWlubWF4KDI1MHB4LDFmcikpO2dhcDoxNnB4O21hcmdpbi1ib3R0b206MjRweH0KLmJveHtiYWNrZ3JvdW5kOiMxZjI5Mzc7Ym9yZGVyOjFweCBzb2xpZCAjMzc0MTUxO2JvcmRlci1yYWRpdXM6MTJweDtwYWRkaW5nOjE2cHg7cG9zaXRpb246cmVsYXRpdmV9Ci5ib3ggaDN7bWFyZ2luLXRvcDowO2ZvbnQtc2l6ZToxNnB4O2NvbG9yOiMzOGJkZjg7ZGlzcGxheTpmbGV4O2FsaWduLWl0ZW1zOmNlbnRlcjtnYXA6OHB4fQouY29kZXtiYWNrZ3JvdW5kOiMxMTE4Mjc7cGFkZGluZzo2cHggMTBweDtib3JkZXItcmFkaXVzOjZweDtmb250LWZhbWlseTptb25vc3BhY2U7Zm9udC1zaXplOjE0cHg7Y29sb3I6I2ZhY2MxNTtmb250LXdlaWdodDpib2xkO2Rpc3BsYXk6aW5saW5lLWJsb2NrO21hcmdpbi10b3A6NHB4fQouYnRuLWdyb3Vwe2Rpc3BsYXk6Z3JpZDtncmlkLXRlbXBsYXRlLWNvbHVtbnM6cmVwZWF0KGF1dG8tZml0LG1pbm1heCgxODBweCwxZnIpKTtnYXA6MTJweH0KYnV0dG9ue3BhZGRpbmc6MTRweDtib3JkZXI6bm9uZTtib3JkZXItcmFkaXVzOjEwcHg7Zm9udC13ZWlnaHQ6NzAwO2ZvbnQtc2l6ZToxNHB4O2N1cnNvcjpwb2ludGVyO3RyYW5zaXRpb246MC4ycztkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6Y2VudGVyO2p1c3RpZnktY29udGVudDpjZW50ZXI7Z2FwOjhweDtjb2xvcjojZmZmfQouYnRuLXNhdmV7YmFja2dyb3VuZDojMDI4NGM3fS5idG4tc2F2ZTpob3ZlcntiYWNrZ3JvdW5kOiMwMzY5YTF9Ci5idG4tcnN0e2JhY2tncm91bmQ6I2Q5NzcwNn0uYnRuLXJzdDpob3ZlcntiYWNrZ3JvdW5kOiNiNDUzMDl9Ci5idG4tc3RvcHtiYWNrZ3JvdW5kOiNkYzI2MjZ9LmJ0bi1zdG9wOmhvdmVye2JhY2tncm91bmQ6I2I5MWMxY30KYXtjb2xvcjojMzhiZGY4O3RleHQtZGVjb3JhdGlvbjpub25lfQphOmhvdmVye3RleHQtZGVjb3JhdGlvbjp1bmRlcmxpbmV9Cjwvc3R5bGU+PC9oZWFkPjxib2R5PjxkaXYgY2xhc3M9ImNhcmQiPgo8ZGl2IGNsYXNzPSJoZWFkZXIiPgo8ZGl2PjxoMiBzdHlsZT0ibWFyZ2luOjA7Zm9udC1zaXplOjIycHgiPvCfmoAgWkVOT1ZBIFVMVElNQVRFIFZQUzwvaDI+PHAgc3R5bGU9Im1hcmdpbjo0cHggMCAwO2NvbG9yOiM5Y2EzYWY7Zm9udC1zaXplOjEzcHgiPk3DoXk6IDxiPiRkaXNwTmFtZSAoJG1hY2hJZCk8L2I+PC9wPjwvZGl2Pgo8c3BhbiBjbGFzcz0iYmFkZ2UiPuKXjyBPTkxJTkUgJiDEkEFORyBDSOG6oFk8L3NwYW4+CjwvZGl2Pgo8ZGl2IGNsYXNzPSJncmlkIj4KPGRpdiBjbGFzcz0iYm94IiBzdHlsZT0iYm9yZGVyLWxlZnQ6NHB4IHNvbGlkICNmNTllMGIiPgo8aDM+8J+MnyAxLiBTdGFyRGVzayBUcnVuZyAoS2h1ecOqbiBEw7luZyk8L2gzPgo8cCBzdHlsZT0ibWFyZ2luOjZweCAwO2ZvbnQtc2l6ZToxM3B4O2NvbG9yOiNkMWQ1ZGIiPktow7RuZyBj4bqnbiBt4bufIHBvcnQsIDYwZnBzIG3GsOG7o3QgbcOgOjwvcD4KSUQ6IDxzcGFuIGNsYXNzPSJjb2RlIj4kc2RJZDwvc3Bhbj48YnI+ClBJTjogPHNwYW4gY2xhc3M9ImNvZGUiPiRzZFBpbjwvc3Bhbj4KPC9kaXY+CjxkaXYgY2xhc3M9ImJveCIgc3R5bGU9ImJvcmRlci1sZWZ0OjRweCBzb2xpZCAjMTBiOTgxIj4KPGgzPuKYgO+4jyAyLiBTdW5zaGluZSAmIE1vb25saWdodCBTdHJlYW08L2gzPgo8cCBzdHlsZT0ibWFyZ2luOjZweCAwO2ZvbnQtc2l6ZToxM3B4O2NvbG9yOiNkMWQ1ZGIiPldlYiBVSSBTdW5zaGluZTo8L3A+CiRzdW5MaW5rClVzZXI6IDxzcGFuIGNsYXNzPSJjb2RlIj56ZW5vdmE8L3NwYW4+PGJyPgpQYXNzOiA8c3BhbiBjbGFzcz0iY29kZSI+JHBhc3M8L3NwYW4+CjwvZGl2Pgo8ZGl2IGNsYXNzPSJib3giIHN0eWxlPSJib3JkZXItbGVmdDo0cHggc29saWQgIzNiODJmNiI+CjxoMz7wn5al77iPIDMuIFdpbmRvd3MgUmVtb3RlIERlc2t0b3A8L2gzPgo8cCBzdHlsZT0ibWFyZ2luOjZweCAwO2ZvbnQtc2l6ZToxM3B4O2NvbG9yOiNkMWQ1ZGIiPklQOiA8c3BhbiBjbGFzcz0iY29kZSI+JHRzSXA6MzM4OTwvc3Bhbj48L3A+ClVzZXI6IDxzcGFuIGNsYXNzPSJjb2RlIj56ZW5vdmE8L3NwYW4+PGJyPgpQYXNzOiA8c3BhbiBjbGFzcz0iY29kZSI+JHBhc3M8L3NwYW4+CjwvZGl2Pgo8L2Rpdj4KJHdlYkJhbm5lcgo8ZGl2IGNsYXNzPSJidG4tZ3JvdXAiPgo8YnV0dG9uIGNsYXNzPSJidG4tc2F2ZSIgb25jbGljaz0ic2VuZENtZCgnU0FWRV9OT1cnKSI+8J+SviBMxq9VIEThu64gTEnhu4ZVIE5HQVk8L2J1dHRvbj4KPGJ1dHRvbiBjbGFzcz0iYnRuLXJzdCIgb25jbGljaz0ic2VuZENtZCgnUkVTVEFSVF9TRVNTSU9OJykiPvCflIEgUkVTRVQgUEhJw4pOIE3hu5pJPC9idXR0b24+CjxidXR0b24gY2xhc3M9ImJ0bi1zdG9wIiBvbmNsaWNrPSJzZW5kQ21kKCdTVE9QX1NFU1NJT04nKSI+8J+bkSBOR+G6rlQgVlBTPC9idXR0b24+CjwvZGl2Pgo8L2Rpdj48c2NyaXB0Pgphc3luYyBmdW5jdGlvbiBzZW5kQ21kKGMpeyBpZihjb25maXJtKCdYw6FjIG5o4bqtbiB0aOG7sWMgaGnhu4duIGzhu4duaDogJytjKyc/JykpeyBsZXQgcj1hd2FpdCBmZXRjaCgnL2FwaS9jbWQnLHttZXRob2Q6J1BPU1QnLGJvZHk6SlNPTi5zdHJpbmdpZnkoe2NtZDpjfSl9KTsgbGV0IGQ9YXdhaXQgci5qc29uKCk7IGFsZXJ0KGQubWVzc2FnZSk7IH0gfQpzZXRUaW1lb3V0KCgpPT57IGxvY2F0aW9uLnJlbG9hZCgpOyB9LCAxNTAwMCk7Cjwvc2NyaXB0PjwvYm9keT48L2h0bWw+CiJACgogICAgICAgICRiID0gW1N5c3RlbS5UZXh0LkVuY29kaW5nXTo6VVRGOC5HZXRCeXRlcygkaHRtbCkKICAgICAgICAkcmVzLkNvbnRlbnRUeXBlID0gInRleHQvaHRtbDsgY2hhcnNldD11dGYtOCIKICAgICAgICAkcmVzLk91dHB1dFN0cmVhbS5Xcml0ZSgkYiwgMCwgJGIuTGVuZ3RoKQogICAgICAgICRyZXMuQ2xvc2UoKQogICAgfSBjYXRjaCB7fQp9Cg==';
+          $bytes = [Convert]::FromBase64String($b64);
+          [System.IO.File]::WriteAllBytes($webScript, $bytes);
+
           Start-Process pwsh.exe -ArgumentList '-NoProfile', '-WindowStyle', 'Hidden', '-File', "`"$webScript`"", '-Port', "$env:WEB_PORT", '-SignalFile', "`"$env:CONTROL_SIGNAL_FILE`"";
           Write-Host "✅ Web Quản Lý VPS đã chạy nền tại cổng $env:WEB_PORT" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
-
-      # ─────────────────────────────────────────────────────────────
-      # 12. IN THÔNG TIN KẾT NỐI TOÀN DIỆN & STEP SUMMARY
-      # ─────────────────────────────────────────────────────────────
       - name: 🎉 Thông tin kết nối Zenova VPS
         shell: pwsh
         run: |
