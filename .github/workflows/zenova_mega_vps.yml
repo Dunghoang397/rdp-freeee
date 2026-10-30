@@ -643,52 +643,65 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       # 7. CÀI ĐẶT DRIVER MÀN HÌNH ẢO (VDD), ÂM THANH ẢO & SUNSHINE
       # ─────────────────────────────────────────────────────────────
+      # ─────────────────────────────────────────────────────────────
+      # 7. CÀI ĐẶT DRIVER MÀN HÌNH ẢO (VDD), ÂM THANH ẢO & SUNSHINE
+      # ─────────────────────────────────────────────────────────────
       - name: 🖥️🔊☀️ Cài Driver Màn Hình Ảo (VDD), Âm Thanh Ảo & Sunshine
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          Write-Host "🖥️ Cài đặt Driver Ảo & Sunshine Streaming..." -ForegroundColor Cyan;
+          Write-Host "🖥️ Cài đặt Driver Ảo & Sunshine Streaming (Tốc Độ Siêu Tốc)..." -ForegroundColor Cyan;
 
           # 1. Màn hình ảo USBMMIDD v2
           try {
               $zip = "$env:TEMP\usbmmidd_v2.zip";
-              Invoke-WebRequest -Uri 'https://www.amyuni.com/downloads/usbmmidd_v2.zip' -OutFile $zip -UseBasicParsing -TimeoutSec 45;
-              Expand-Archive -Path $zip -DestinationPath 'C:\' -Force;
-              Push-Location 'C:\usbmmidd_v2';
-              Get-ChildItem -Filter '*.cer' | ForEach-Object {
-                  Import-Certificate -FilePath ($_.FullName) -CertStoreLocation 'Cert:\LocalMachine\Root' *>$null;
-                  Import-Certificate -FilePath ($_.FullName) -CertStoreLocation 'Cert:\LocalMachine\TrustedPublisher' *>$null;
-              };
-              & .\deviceinstaller64.exe install usbmmidd.inf usbmmidd *> $null;
-              & .\deviceinstaller64.exe enableidd 1 *> $null;
-              Pop-Location;
-              Write-Host "│ ✅ Màn hình ảo VDD sẵn sàng!" -ForegroundColor Green;
+              & curl.exe -L --retry 3 --connect-timeout 20 'https://www.amyuni.com/downloads/usbmmidd_v2.zip' -o "$zip" 2>$null;
+              if (Test-Path "$zip") {
+                  Expand-Archive -Path $zip -DestinationPath 'C:\' -Force;
+                  Push-Location 'C:\usbmmidd_v2';
+                  Get-ChildItem -Filter '*.cer' | ForEach-Object {
+                      Import-Certificate -FilePath ($_.FullName) -CertStoreLocation 'Cert:\LocalMachine\Root' *>$null;
+                      Import-Certificate -FilePath ($_.FullName) -CertStoreLocation 'Cert:\LocalMachine\TrustedPublisher' *>$null;
+                  };
+                  & .\deviceinstaller64.exe install usbmmidd.inf usbmmidd *> $null;
+                  & .\deviceinstaller64.exe enableidd 1 *> $null;
+                  Pop-Location;
+                  Write-Host "│ ✅ Màn hình ảo VDD sẵn sàng!" -ForegroundColor Green;
+              }
           } catch {}
 
-          # 2. Card âm thanh ảo VB-Audio
+          # 2. Card âm thanh ảo (Xử lý không chặn / Non-blocking chống treo pnputil)
           try {
               @('MMCSS', 'AudioEndpointBuilder', 'Audiosrv') | ForEach-Object {
                   Set-Service -Name $_ -StartupType Automatic -ErrorAction SilentlyContinue;
                   Start-Service -Name $_ -ErrorAction SilentlyContinue;
               };
               $vbZip = "$env:TEMP\VBCable.zip";
-              try {
-                  Invoke-WebRequest -Uri 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip' -OutFile $vbZip -UseBasicParsing -TimeoutSec 30;
-              } catch {
-                  Invoke-WebRequest -Uri 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip' -OutFile $vbZip -UseBasicParsing -TimeoutSec 30;
+              & curl.exe -L --retry 2 --connect-timeout 10 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip' -o "$vbZip" 2>$null;
+              if (Test-Path "$vbZip") {
+                  Expand-Archive -Path "$vbZip" -DestinationPath 'C:\VBCable' -Force;
+                  $setupExe = 'C:\VBCable\VBCABLE_Setup_x64.exe';
+                  if (Test-Path "$setupExe") {
+                      Start-Process -FilePath "$setupExe" -ArgumentList '-i', '-h' -WindowStyle Hidden;
+                      Start-Sleep -Seconds 1;
+                  }
               }
-              Expand-Archive -Path $vbZip -DestinationPath "C:\VBCable" -Force;
-              $inf = Get-ChildItem -Path "C:\VBCable" -Filter '*.inf' -Recurse | Select-Object -First 1;
-              if ($inf) { pnputil /add-driver ($inf.FullName) /install *> $null; }
               Write-Host "│ ✅ Card âm thanh ảo sẵn sàng!" -ForegroundColor Green;
           } catch {}
 
-          # 3. Sunshine Game Streaming Server
+          # 3. Sunshine Streaming Server (Cài siêu tốc qua MSI chính thức ~3s, KHÔNG dùng choco)
           try {
-              choco install sunshine -y --no-progress --limit-output;
-              Start-Sleep -Seconds 3;
-              # Cấu hình thông tin tài khoản Sunshine
+              $sunMsi = "$env:TEMP\Sunshine.msi";
+              Write-Host "│ ⬇️ Đang tải Sunshine MSI chính thức từ GitHub..." -ForegroundColor Cyan;
+              & curl.exe -L --retry 3 --connect-timeout 15 'https://github.com/LizardByte/Sunshine/releases/download/v2026.914.233613/Sunshine-Windows-AMD64-installer.msi' -o "$sunMsi" 2>$null;
+              if (Test-Path "$sunMsi") {
+                  Start-Process msiexec.exe -ArgumentList "/i `"$sunMsi`" /qn /norestart" -Wait;
+                  Start-Sleep -Seconds 2;
+              } else {
+                  choco install sunshine -y --no-progress --limit-output;
+              }
+
               $sunshineExe = 'C:\Program Files\Sunshine\sunshine.exe';
               if (Test-Path "$sunshineExe") {
                   & "$sunshineExe" --creds zenova Zenova@2026 2>&1 | Out-Null;
@@ -696,15 +709,13 @@ jobs:
               Set-Service -Name 'SunshineService' -StartupType Automatic -ErrorAction SilentlyContinue;
               Start-Service -Name 'SunshineService' -ErrorAction SilentlyContinue;
               Write-Host "│ ✅ Sunshine Streaming Server sẵn sàng tại cổng 47990!" -ForegroundColor Green;
-          } catch {}
+          } catch {
+              Write-Host "│ ⚠️ Lỗi cài Sunshine: $($_.Exception.Message)" -ForegroundColor Yellow;
+          }
 
           Write-Host "✅ Cài đặt Driver Màn Hình Ảo, Card Âm Thanh & Sunshine hoàn tất!" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
-
-      # ─────────────────────────────────────────────────────────────
-      # 8. CÀI ĐẶT TRỌN BỘ ỨNG DỤNG, CLOUDFLARE TUNNEL & HÌNH NỀN ZENOVA
-      # ─────────────────────────────────────────────────────────────
       - name: 📦 Cài đặt trọn bộ App (Discord, Spotify, Bandicam, EVKey, Roblox, StarDesk Trung) & Hình Nền
         shell: pwsh
         run: |
@@ -846,12 +857,10 @@ jobs:
           } catch {}
 
           # ─────────────────────────────────────────────────────────────
-          # 5. CÀI ĐẶT DISCORD, SPOTIFY, BANDICAM QUA CHOCOLATEY
+          # 5. CÀI ĐẶT DISCORD, SPOTIFY, BANDICAM (CHẠY NỀN SIÊU NHANH)
           # ─────────────────────────────────────────────────────────────
-          Write-Host "│ 📦 Cài đặt Discord, Spotify, Bandicam..." -ForegroundColor Cyan;
-          try {
-              choco install bandicam spotify discord -y --no-progress --limit-output;
-          } catch {}
+          Write-Host "│ 📦 Khởi động tiến trình cài đặt Discord, Spotify, Bandicam chạy ngầm..." -ForegroundColor Cyan;
+          Start-Process powershell -ArgumentList "-NoProfile", "-Command", "choco install bandicam spotify discord -y --no-progress --limit-output" -WindowStyle Hidden;
 
           # ─────────────────────────────────────────────────────────────
           # 6. CÀI ĐẶT ROBLOX & FIX TƯƠNG THÍCH ĐỒ HỌA
