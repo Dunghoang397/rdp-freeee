@@ -1,0 +1,18 @@
+===========================================================
+         THÔNG TIN MÁY CHỦ ZENOVA ULTIMATE VPS             
+===========================================================
+Tên hiển thị    : Zenova Ultimate Machine (zenova-8)
+Trạng thái      : Online
+IP Tailscale    : 100.80.235.90
+User Windows    : zenova
+Mật khẩu máy    : Zenova@2026
+-----------------------------------------------------------
+3 LỰA CHỌN KẾT NỐI:
+1. Remote Desktop :  (User: zenova | Pass: Zenova@2026)
+2. Sunshine Stream: https:// (User: zenova | Pass: Zenova@2026)
+3. StarDesk Trung : ID: (Xem trực tiếp trên màn hình) | PIN: Zenova2026
+-----------------------------------------------------------
+Web Quản Lý VPS : http:///
+Kho lưu ổ đĩa   : Dunghoang397/rdp-freeee (zenova-storage-zenova-8)
+Cập nhật lúc    : 2026-10-30 22:14:03 (Giờ Việt Nam)
+===========================================================
