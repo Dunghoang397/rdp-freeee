@@ -1,0 +1,27 @@
+{
+  "machineId": "zenova-545",
+  "displayName": "Zenova Ultimate Machine",
+  "status": "Stopped",
+  "isOnline": false,
+  "tailscaleIp": "Đang kết nối...",
+  "stardeskId": "",
+  "stardeskPin": "Zenova2026",
+  "sunshinePort": "47990",
+  "user": "zenova",
+  "pass": "Zenova@2026",
+  "storageRepo": "Dunghoang397/rdp-freeee",
+  "runnerRepo": "Dunghoang397/rdp-freeee",
+  "runId": "41075698685",
+  "updatedUtc": "2026-10-30T14:54:09.0378488Z",
+  "updatedVn": "2026-10-30 21:54:09 (UTC+7)",
+  "durationMinutes": 1440,
+  "connections": {
+    "remoteDesktop": "",
+    "sunshineStream": "https://",
+    "stardeskTrung": {
+      "id": "",
+      "pin": "Zenova2026"
+    }
+  },
+  "note": "Máy đã tắt phiên"
+}
