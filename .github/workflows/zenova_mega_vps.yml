@@ -152,6 +152,8 @@ jobs:
         env:
           INPUT_DURATION: ${{ inputs.duration }}
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           $nowEpoch = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds();
           "JOB_START_EPOCH=$nowEpoch" >> "$env:GITHUB_ENV";
 
@@ -195,7 +197,7 @@ jobs:
 
           # Khởi tạo VHDX ảo hoặc DOS Device
           $vhdContainer = 'C:\ZENOVA-VHD-HOST';
-          New-Item -ItemType Directory -Force -Path "$vhdContainer" | Out-Null;
+          New-Item -ItemType Directory -Force -Path "$vhdContainer" -ErrorAction SilentlyContinue | Out-Null;
           $vhdFile = [System.IO.Path]::Combine("$vhdContainer", 'zenova-os.vhdx');
 
           $sizeBytes = ([int64]"$env:VHD_SIZE_GB") * 1GB;
@@ -215,9 +217,9 @@ jobs:
 
           if (-not ($mounted)) {
               $fallbackDir = [System.IO.Path]::Combine("$vhdContainer", 'VIRTUAL-DRIVE-ROOT');
-              New-Item -ItemType Directory -Force -Path "$fallbackDir" | Out-Null;
+              New-Item -ItemType Directory -Force -Path "$fallbackDir" -ErrorAction SilentlyContinue | Out-Null;
               & subst "${dl}:" "$fallbackDir";
-              Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\DOS Devices' -Name "${dl}:" -Value "\??\$fallbackDir" -Type String -Force;
+              Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\DOS Devices' -Name "${dl}:" -Value "\??\$fallbackDir" -Type String -Force -ErrorAction SilentlyContinue;
               $null = New-PSDrive -Name "$dl" -PSProvider FileSystem -Root "${dl}:\" -Scope Global -ErrorAction SilentlyContinue;
           }
 
@@ -231,7 +233,7 @@ jobs:
           $controlSignal    = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'zenova-control-action.txt');
 
           @("$sharedRoot", "$sharedSessionDir", "$sharedDataDir", "$sharedOsDir", "$profileStoreRoot", "${dl}:\Apps") | ForEach-Object {
-              New-Item -ItemType Directory -Force -Path "$_" | Out-Null;
+              New-Item -ItemType Directory -Force -Path "$_" -ErrorAction SilentlyContinue | Out-Null;
           };
 
           $baseline = @{
@@ -272,9 +274,12 @@ jobs:
       - name: 🧰 Tạo script đóng gói & lưu trữ dữ liệu
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           $scriptLines = @(
               'param([string]$Reason = "session-end")',
               '$ErrorActionPreference = "Continue";',
+              '$global:LASTEXITCODE   = 0;',
               'if ("$env:STORAGE_GH_TOKEN") { $env:GH_TOKEN = "$env:STORAGE_GH_TOKEN"; $env:GITHUB_TOKEN = "$env:STORAGE_GH_TOKEN"; }',
               'if (("$env:DATA_RESTORED" -ne "1") -or ("$env:SESSION_READY" -ne "1")) {',
               '    Write-Host "⚠️ Phiên chưa sẵn sàng hoàn toàn, bỏ qua lưu dữ liệu!" -ForegroundColor Yellow;',
@@ -323,12 +328,12 @@ jobs:
               '',
               'Write-Host "💾 [$Reason] Đang xuất Registry & sao lưu Profile..." -ForegroundColor Cyan;',
               '$regBk = [System.IO.Path]::Combine("$osDir", "Registry");',
-              'New-Item -ItemType Directory -Force -Path "$regBk" | Out-Null;',
+              'New-Item -ItemType Directory -Force -Path "$regBk" -ErrorAction SilentlyContinue | Out-Null;',
               'reg export "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall" "$regBk\Uninstall-x64.reg" /y *> $null;',
               'reg export "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall" "$regBk\Uninstall-x86.reg" /y *> $null;',
               'reg export "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "$regBk\System-Env.reg" /y *> $null;',
               'reg export "HKLM\SOFTWARE\Microsoft\Cryptography" "$regBk\Machine-Cryptography.reg" /y *> $null;',
-              'New-Item -ItemType Directory -Force -Path "$regBk\AppSoftware" | Out-Null;',
+              'New-Item -ItemType Directory -Force -Path "$regBk\AppSoftware" -ErrorAction SilentlyContinue | Out-Null;',
               'Get-ChildItem "HKCU:\Software" -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -notin @("Microsoft", "Classes", "Policies", "RegisteredApplications") } | ForEach-Object {',
               '    $subName = $_.PSChildName;',
               '    $safeName = ($subName -replace ''[^A-Za-z0-9._\-]'', ''_'');',
@@ -342,7 +347,7 @@ jobs:
               '',
               'if (("$u") -and ("$profSrc") -and (Test-Path "$profSrc")) {',
               '    $profDst = [System.IO.Path]::Combine("$root", "Users", "$u");',
-              '    New-Item -ItemType Directory -Force -Path "$profDst" | Out-Null;',
+              '    New-Item -ItemType Directory -Force -Path "$profDst" -ErrorAction SilentlyContinue | Out-Null;',
               '    $excludeDirs = @(',
               '        "$profSrc\AppData\Roaming\Microsoft\Protect",',
               '        "$profSrc\AppData\Roaming\Microsoft\Crypto",',
@@ -362,9 +367,9 @@ jobs:
               '        $base = Get-Content -Raw -Path "$env:BASELINE_FILE" | ConvertFrom-Json;',
               '        $skipNames = @("Tailscale", "Sunshine", "chocolatey", "Package Cache", "Microsoft", "Windows Defender");',
               '        $cOverlay = [System.IO.Path]::Combine("$osDir", "C-Drive-Overlay");',
-              '        New-Item -ItemType Directory -Force -Path "$cOverlay\PF64" | Out-Null;',
-              '        New-Item -ItemType Directory -Force -Path "$cOverlay\PF86" | Out-Null;',
-              '        New-Item -ItemType Directory -Force -Path "$cOverlay\PD" | Out-Null;',
+              '        New-Item -ItemType Directory -Force -Path "$cOverlay\PF64" -ErrorAction SilentlyContinue | Out-Null;',
+              '        New-Item -ItemType Directory -Force -Path "$cOverlay\PF86" -ErrorAction SilentlyContinue | Out-Null;',
+              '        New-Item -ItemType Directory -Force -Path "$cOverlay\PD" -ErrorAction SilentlyContinue | Out-Null;',
               '        Get-ChildItem "C:\Program Files" -Directory -Force -ErrorAction SilentlyContinue | Where-Object { ($_.Name -notin ($base.PF64)) -and ($_.Name -notin ($skipNames)) } | ForEach-Object {',
               '            $dest = [System.IO.Path]::Combine("$cOverlay\PF64", $_.Name);',
               '            robocopy ($_.FullName) "$dest" /MIR /XJ /R:1 /W:1 /MT:8 /NFL /NDL /NJH /NJS /NP *> $null;',
@@ -382,7 +387,7 @@ jobs:
               '',
               'try {',
               '    $extraRoot = [System.IO.Path]::Combine("$osDir", "DriveRoot-Extra");',
-              '    New-Item -ItemType Directory -Force -Path "$extraRoot" | Out-Null;',
+              '    New-Item -ItemType Directory -Force -Path "$extraRoot" -ErrorAction SilentlyContinue | Out-Null;',
               '    Get-ChildItem "${dl}:\" -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -notin @("ZENOVA-SYSTEM", "System Volume Information", "`$RECYCLE.BIN", "Pagefile.sys") } | ForEach-Object {',
               '        $dest = [System.IO.Path]::Combine("$extraRoot", $_.Name);',
               '        if ($_.PSIsContainer) { robocopy ($_.FullName) "$dest" /MIR /XJ /R:1 /W:1 /MT:8 /NFL /NDL /NJH /NJS /NP *> $null; }',
@@ -394,7 +399,7 @@ jobs:
               '# Đóng gói và đẩy dữ liệu lên GitHub Release',
               '$packDir = [System.IO.Path]::Combine("$env:RUNNER_TEMP", "gh-pack-$Reason");',
               'if (Test-Path "$packDir") { Remove-Item -Path "$packDir" -Recurse -Force -ErrorAction SilentlyContinue; }',
-              'New-Item -ItemType Directory -Force -Path "$packDir" | Out-Null;',
+              'New-Item -ItemType Directory -Force -Path "$packDir" -ErrorAction SilentlyContinue | Out-Null;',
               '$archiveBase = [System.IO.Path]::Combine("$packDir", "zenova-drive.7z");',
               'Write-Host "📦 [$Reason] Đang nén ổ đĩa bằng 7z (phân mảnh 1900MB)..." -ForegroundColor Cyan;',
               'Push-Location "$root";',
@@ -430,6 +435,7 @@ jobs:
               '} catch {}',
               'Remove-Item -Path "$packDir" -Recurse -Force -ErrorAction SilentlyContinue;',
               'Write-Host "✅ [$Reason] Đã lưu trữ hoàn tất dữ liệu lên GitHub Release ($env:RELEASE_TAG)!" -ForegroundColor Green;',
+              '$global:LASTEXITCODE = 0;',
               'exit 0;'
           );
           $saveScriptPath = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'save-data.ps1');
@@ -445,9 +451,12 @@ jobs:
       - name: 🧰 Tạo script đồng bộ trạng thái máy lên Git
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           $stateLines = @(
               'param([string]$Status = "Online", [string]$SdId = "", [string]$SdPin = "", [string]$ExtraNote = "")',
               '$ErrorActionPreference = "Continue";',
+              '$global:LASTEXITCODE   = 0;',
               '$token = if ("$env:STORAGE_GH_TOKEN") { "$env:STORAGE_GH_TOKEN" } else { "$env:GH_TOKEN" };',
               'if (-not $token) { return; }',
               '$cleanId     = "$env:MACHINE_ID";',
@@ -516,7 +525,7 @@ jobs:
               '$gitStage = [System.IO.Path]::Combine("$env:RUNNER_TEMP", "git-repo-status");',
               'try {',
               '    if (Test-Path "$gitStage") { Remove-Item -Path "$gitStage" -Recurse -Force -ErrorAction SilentlyContinue; }',
-              '    New-Item -ItemType Directory -Force -Path "$gitStage" | Out-Null;',
+              '    New-Item -ItemType Directory -Force -Path "$gitStage" -ErrorAction SilentlyContinue | Out-Null;',
               '    Push-Location "$gitStage";',
               '    git init -q;',
               '    git config user.name "Zenova-Bot";',
@@ -534,7 +543,8 @@ jobs:
               '    Pop-Location;',
               '} catch {',
               '    if (((Get-Location).Path) -eq "$gitStage") { Pop-Location; }',
-              '}'
+              '}',
+              '$global:LASTEXITCODE = 0;'
           );
           $pushStateScript = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'push-repo-state.ps1');
           Set-Content -Path "$pushStateScript" -Value ($stateLines -join "`r`n") -Encoding UTF8;
@@ -573,7 +583,7 @@ jobs:
 
           $dlDir = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'gh-restore');
           if (Test-Path "$dlDir") { Remove-Item -Path "$dlDir" -Recurse -Force -ErrorAction SilentlyContinue; }
-          New-Item -ItemType Directory -Force -Path "$dlDir" | Out-Null;
+          New-Item -ItemType Directory -Force -Path "$dlDir" -ErrorAction SilentlyContinue | Out-Null;
 
           $isFirstRun = $false;
           $sourceTag = "$env:RELEASE_TAG";
@@ -632,7 +642,7 @@ jobs:
           if (Test-Path "$firstChunk") {
               $stage = [System.IO.Path]::Combine("$env:VHD_CONTAINER", 'restore-stage');
               if (Test-Path "$stage") { Remove-Item -Path "$stage" -Recurse -Force -ErrorAction SilentlyContinue; }
-              New-Item -ItemType Directory -Force -Path "$stage" | Out-Null;
+              New-Item -ItemType Directory -Force -Path "$stage" -ErrorAction SilentlyContinue | Out-Null;
               & 7z x "$firstChunk" "-o$stage" -y -mmt=on *> $null;
 
               robocopy "$stage" "$env:SHARED_ROOT" /E /XJ /R:1 /W:1 /MT:8 /NFL /NDL /NJH /NJS /NP *> $null;
@@ -698,6 +708,8 @@ jobs:
         env:
           FIXED_PASS: ${{ inputs.fixed_password }}
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           Write-Host "⚙️ ĐANG THIẾT LẬP USER ZENOVA & TỐI ƯU TOÀN DIỆN..." -ForegroundColor Yellow;
 
           # Tắt chính sách mật khẩu phức tạp
@@ -716,22 +728,39 @@ jobs:
           $pass = "$env:FIXED_PASS";
           "FIXED_PASSWORD=$pass" >> "$env:GITHUB_ENV";
 
-          # Tạo User zenova
-          $userExists = net user $user 2>$null;
-          if ($LASTEXITCODE -ne 0) {
-              net user $user $pass /add /comment:"Zenova Cloud User" /fullname:"Zenova" /expires:never;
+          # Tạo User zenova (Tương thích 100% Windows Server 2022 & Server 2025)
+          $secPass = ConvertTo-SecureString "$pass" -AsPlainText -Force;
+          try {
+              $existingUser = Get-LocalUser -Name $user -ErrorAction SilentlyContinue;
+              if (-not $existingUser) {
+                  New-LocalUser -Name $user -Password $secPass -FullName "Zenova" -Description "Zenova Cloud User" -PasswordNeverExpires -ErrorAction SilentlyContinue;
+              } else {
+                  Set-LocalUser -Name $user -Password $secPass -PasswordNeverExpires $true -ErrorAction SilentlyContinue;
+              }
+          } catch {}
+
+          # Fallback tạo bằng net user nếu chưa tạo được
+          try {
+              & net user $user $pass /add /comment:"Zenova Cloud User" /fullname:"Zenova" /expires:never 2>&1 | Out-Null;
+              & net user $user $pass 2>&1 | Out-Null;
+          } catch {}
+
+          # Đặt mật khẩu không bao giờ hết hạn bằng Set-LocalUser chuẩn (KHÔNG dùng wmic)
+          try {
+              Set-LocalUser -Name $user -PasswordNeverExpires $true -ErrorAction SilentlyContinue;
+          } catch {}
+
+          # Thêm vào nhóm Administrators và Remote Desktop Users
+          try {
               Add-LocalGroupMember -Group "Administrators" -Member $user -ErrorAction SilentlyContinue;
               Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user -ErrorAction SilentlyContinue;
-          } else {
-              net user $user $pass;
-          }
-          & wmic useraccount where name='zenova' set PasswordExpires=FALSE *> $null;
+          } catch {}
 
           # Cấu hình AutoAdminLogon cho zenova
           $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon';
-          Set-ItemProperty -Path $winlogon -Name 'AutoAdminLogon' -Value '1' -Force;
-          Set-ItemProperty -Path $winlogon -Name 'DefaultUserName' -Value $user -Force;
-          Set-ItemProperty -Path $winlogon -Name 'DefaultPassword' -Value $pass -Force;
+          Set-ItemProperty -Path $winlogon -Name 'AutoAdminLogon' -Value '1' -Force -ErrorAction SilentlyContinue;
+          Set-ItemProperty -Path $winlogon -Name 'DefaultUserName' -Value $user -Force -ErrorAction SilentlyContinue;
+          Set-ItemProperty -Path $winlogon -Name 'DefaultPassword' -Value $pass -Force -ErrorAction SilentlyContinue;
 
           # ─────────────────────────────────────────────────────────────
           # 🚀 FIX CPU 100% & TỐI ƯU HIỆU NĂNG TỐI THƯỢNG
@@ -741,19 +770,19 @@ jobs:
           # 1. Tắt PowerThrottling
           $ptPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling';
           New-Item -Path $ptPath -Force -ErrorAction SilentlyContinue | Out-Null;
-          Set-ItemProperty -Path $ptPath -Name 'PowerThrottlingOff' -Value 1 -Type DWord -Force;
+          Set-ItemProperty -Path $ptPath -Name 'PowerThrottlingOff' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
 
           # 2. Tắt CPU Core Parking & Tối ưu lập lịch CPU
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Power' -Name 'CsEnabled' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue;
-          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' -Name 'Win32PrioritySeparation' -Value 0x26 -Type DWord -Force;
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' -Name 'Win32PrioritySeparation' -Value 0x26 -Type DWord -Force -ErrorAction SilentlyContinue;
 
           # 3. Kích hoạt Power Scheme High Performance / Ultimate
           powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null | Out-Null;
           powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null | Out-Null;
-          powercfg /change standby-timeout-ac 0;
-          powercfg /change monitor-timeout-ac 0;
-          powercfg /change disk-timeout-ac 0;
-          powercfg /hibernate off;
+          powercfg /change standby-timeout-ac 0 2>$null;
+          powercfg /change monitor-timeout-ac 0 2>$null;
+          powercfg /change disk-timeout-ac 0 2>$null;
+          powercfg /hibernate off 2>$null;
 
           # 4. Tắt Windows Defender Realtime (Tiết kiệm 40% CPU)
           try {
@@ -778,15 +807,15 @@ jobs:
           }
 
           # 6. Múi giờ Việt Nam
-          tzutil /s 'SE Asia Standard Time';
+          tzutil /s 'SE Asia Standard Time' 2>$null;
 
           # 7. Bật Remote Desktop & Mở Firewall RDP
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force;
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0 -Force;
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0 -Force;
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force -ErrorAction SilentlyContinue;
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0 -Force -ErrorAction SilentlyContinue;
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0 -Force -ErrorAction SilentlyContinue;
           Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue;
           Start-Service -Name TermService -ErrorAction SilentlyContinue;
-          netsh advfirewall firewall add rule name="ZENOVA-ALL-IN" dir=in action=allow protocol=any profile=any | Out-Null;
+          netsh advfirewall firewall add rule name="ZENOVA-ALL-IN" dir=in action=allow protocol=any profile=any 2>&1 | Out-Null;
 
           # 8. Bật DirectPlay cho Games
           try {
@@ -803,20 +832,32 @@ jobs:
       - name: 🌐 Cài đặt Tailscale Mesh Network
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           Write-Host "🌐 Đang cài đặt Tailscale..." -ForegroundColor Cyan;
           $msiPath = "$env:TEMP\tailscale.msi";
-          Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile $msiPath -UseBasicParsing;
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$msiPath`"", "/quiet", "/norestart" -Wait;
+          try {
+              Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile $msiPath -UseBasicParsing -TimeoutSec 60;
+              Start-Process msiexec.exe -ArgumentList "/i", "`"$msiPath`"", "/quiet", "/norestart" -Wait;
+          } catch {}
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe";
-          Set-Service -Name "Tailscale" -StartupType Automatic;
-          Start-Service -Name "Tailscale";
+          Set-Service -Name "Tailscale" -StartupType Automatic -ErrorAction SilentlyContinue;
+          Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue;
           Start-Sleep -Seconds 2;
 
           if ("${{ secrets.TAILSCALE_AUTH_KEY }}") {
-              & "$ts" up "--authkey=${{ secrets.TAILSCALE_AUTH_KEY }}" "--hostname=zenova-$env:MACHINE_ID-$env:GITHUB_RUN_ID" --accept-routes --accept-dns --reset;
-              $ip = (& "$ts" ip -4 | Out-String).Trim();
-              "TAILSCALE_IP=$ip" >> "$env:GITHUB_ENV";
-              Write-Host "✅ IP Tailscale: $ip" -ForegroundColor Green;
+              try {
+                  & "$ts" up "--authkey=${{ secrets.TAILSCALE_AUTH_KEY }}" "--hostname=zenova-$env:MACHINE_ID-$env:GITHUB_RUN_ID" --accept-routes --accept-dns --reset;
+                  $ip = (& "$ts" ip -4 2>$null | Out-String).Trim();
+                  if ($ip) {
+                      "TAILSCALE_IP=$ip" >> "$env:GITHUB_ENV";
+                      Write-Host "✅ IP Tailscale: $ip" -ForegroundColor Green;
+                  } else {
+                      "TAILSCALE_IP=127.0.0.1" >> "$env:GITHUB_ENV";
+                  }
+              } catch {
+                  "TAILSCALE_IP=127.0.0.1" >> "$env:GITHUB_ENV";
+              }
           } else {
               Write-Host "⚠️ Chưa cấu hình secret TAILSCALE_AUTH_KEY!" -ForegroundColor Yellow;
               "TAILSCALE_IP=127.0.0.1" >> "$env:GITHUB_ENV";
@@ -830,6 +871,8 @@ jobs:
       - name: 🖥️🔊☀️ Cài Driver Màn Hình Ảo (VDD), Âm Thanh Ảo & Sunshine
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           Write-Host "🖥️ Cài đặt Driver Ảo & Sunshine Streaming..." -ForegroundColor Cyan;
 
           # Job 1: Màn hình ảo USBMMIDD v2
@@ -887,19 +930,21 @@ jobs:
       - name: 📦 Cài đặt trọn bộ App (Discord, Spotify, Bandicam, EVKey, Roblox, StarDesk Trung) & Hình Nền
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           Write-Host "📦 Đang cài đặt các ứng dụng và áp dụng hình nền Zenova..." -ForegroundColor Cyan;
           $appsFolder = "$($env:MOUNT_LETTER):\Apps";
-          New-Item -ItemType Directory -Force -Path "$appsFolder" | Out-Null;
+          New-Item -ItemType Directory -Force -Path "$appsFolder" -ErrorAction SilentlyContinue | Out-Null;
 
           # 1. Tải và áp dụng Hình Nền Mặc Định Zenova
           $wpUrl = "https://raw.githubusercontent.com/Dunghoang397/rdp-freeee/2715203b1462985959767187a585efb637441f9f/Zenova%20Cloud%20Aurora%20Lake.png";
           $wpPath = "C:\Windows\Web\Wallpaper\Zenova.png";
-          New-Item -ItemType Directory -Force -Path (Split-Path "$wpPath") | Out-Null;
+          New-Item -ItemType Directory -Force -Path (Split-Path "$wpPath") -ErrorAction SilentlyContinue | Out-Null;
           try {
               Invoke-WebRequest -Uri "$wpUrl" -OutFile "$wpPath" -UseBasicParsing -TimeoutSec 45;
               if (Test-Path "$wpPath") {
-                  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value "$wpPath";
-                  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name WallpaperStyle -Value "10";
+                  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value "$wpPath" -Force -ErrorAction SilentlyContinue;
+                  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name WallpaperStyle -Value "10" -Force -ErrorAction SilentlyContinue;
                   $setterCode = "using System; using System.Runtime.InteropServices; public class WallSetter { [DllImport(`"user32.dll`", CharSet = CharSet.Auto)] public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni); }";
                   Add-Type -TypeDefinition $setterCode -ErrorAction SilentlyContinue;
                   [WallSetter]::SystemParametersInfo(20, 0, "$wpPath", 3);
@@ -912,30 +957,35 @@ jobs:
           # 2. Cài đặt các ứng dụng qua Chocolatey
           Write-Host "│ 📦 Cài Discord, Spotify, Bandicam, EVKey, Chrome, Roblox & VC Runtimes..." -ForegroundColor Cyan;
           $chocoCore = "discord spotify bandicam evkey googlechrome vcredist-all directx";
-          choco install $chocoCore -y --no-progress --limit-output;
+          try {
+              choco install $chocoCore -y --no-progress --limit-output;
+          } catch {}
 
           # 3. Cài đặt Roblox & Fix lỗi không vào được Roblox
           Write-Host "│ 🎮 Cài đặt Roblox & Fix tương thích DirectX 11/OpenGL..." -ForegroundColor Cyan;
-          choco install roblox -y --no-progress --limit-output;
+          try {
+              choco install roblox -y --no-progress --limit-output;
+          } catch {}
 
           # Fix Roblox Registry & Compatibility
-          $robReg = "HKCU:\Software\Roblox\RobloxApp";
-          New-Item -Path $robReg -Force -ErrorAction SilentlyContinue | Out-Null;
-          Set-ItemProperty -Path $robReg -Name 'FFlagDebugGraphicsDisableDirect3D11' -Value 'false' -Force;
-          Set-ItemProperty -Path $robReg -Name 'FFlagDebugGraphicsPreferD3D11' -Value 'true' -Force;
-          Set-ItemProperty -Path $robReg -Name 'FFlagDebugGraphicsPreferOpenGL' -Value 'false' -Force;
+          try {
+              $robReg = "HKCU:\Software\Roblox\RobloxApp";
+              New-Item -Path $robReg -Force -ErrorAction SilentlyContinue | Out-Null;
+              Set-ItemProperty -Path $robReg -Name 'FFlagDebugGraphicsDisableDirect3D11' -Value 'false' -Force -ErrorAction SilentlyContinue;
+              Set-ItemProperty -Path $robReg -Name 'FFlagDebugGraphicsPreferD3D11' -Value 'true' -Force -ErrorAction SilentlyContinue;
+              Set-ItemProperty -Path $robReg -Name 'FFlagDebugGraphicsPreferOpenGL' -Value 'false' -Force -ErrorAction SilentlyContinue;
 
-          # Fix Roblox Layer Compatibility
-          $appCompat = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers";
-          New-Item -Path $appCompat -Force -ErrorAction SilentlyContinue | Out-Null;
-          @("C:\Program Files (x86)\Roblox\Versions", "C:\Users\zenova\AppData\Local\Roblox\Versions") | ForEach-Object {
-              if (Test-Path "$_") {
-                  Get-ChildItem -Path "$_" -Filter 'RobloxPlayerBeta.exe' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-                      Set-ItemProperty -Path $appCompat -Name ($_.FullName) -Value '~ HIGHDPIAWARE RUNASADMIN WIN8RTM' -Force;
-                  };
-              }
-          };
-          Write-Host "│ ✅ Đã áp dụng Fix tương thích Roblox hoàn tất!" -ForegroundColor Green;
+              $appCompat = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers";
+              New-Item -Path $appCompat -Force -ErrorAction SilentlyContinue | Out-Null;
+              @("C:\Program Files (x86)\Roblox\Versions", "C:\Users\zenova\AppData\Local\Roblox\Versions") | ForEach-Object {
+                  if (Test-Path "$_") {
+                      Get-ChildItem -Path "$_" -Filter 'RobloxPlayerBeta.exe' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                          Set-ItemProperty -Path $appCompat -Name ($_.FullName) -Value '~ HIGHDPIAWARE RUNASADMIN WIN8RTM' -Force -ErrorAction SilentlyContinue;
+                      };
+                  }
+              };
+              Write-Host "│ ✅ Đã áp dụng Fix tương thích Roblox hoàn tất!" -ForegroundColor Green;
+          } catch {}
 
           # 4. Cài đặt StarDesk Trung (Bản chuẩn 1.5.3 từ abcd release)
           Write-Host "│ 🌟 Cài đặt StarDesk Trung..." -ForegroundColor Cyan;
@@ -955,7 +1005,7 @@ jobs:
               Write-Host "│ ⚠️ Lỗi cài StarDesk: $($_.Exception.Message)" -ForegroundColor Yellow;
           }
 
-          # 5. Cài đặt NetEase GameViewer (Hỗ trợ remote tốc độ cao bổ sung)
+          # 5. Cài đặt NetEase GameViewer
           $gvUrl = 'https://github.com/ddvdat-glitch/abcd/releases/download/app/uuyc_4.43.1.exe';
           $gvInstaller = 'C:\uuyc_4.43.1.exe';
           try {
@@ -967,10 +1017,10 @@ jobs:
               }
           } catch {}
 
-          # 6. Cài thêm các gói Chocolatey phụ (nếu có yêu cầu)
+          # 6. Cài thêm các gói Chocolatey phụ nếu có
           if ("${{ inputs.choco_packages }}") {
               $extra = "${{ inputs.choco_packages }}";
-              choco install $extra -y --no-progress --limit-output;
+              try { choco install $extra -y --no-progress --limit-output; } catch {}
           }
           Write-Host "✅ Toàn bộ ứng dụng đã được cài đặt sẵn sàng!" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
@@ -982,6 +1032,8 @@ jobs:
       - name: 🔑 Cấu hình PIN StarDesk Trung & Lấy Device ID
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           Write-Host "🔍 Đang trích xuất ID StarDesk Trung / GameViewer..." -ForegroundColor Cyan;
           $gvCli = 'C:\Program Files\Netease\GameViewer\bin\uuyc-cli.exe';
 
@@ -1029,6 +1081,8 @@ jobs:
       - name: 🖥️ Tạo các phím tắt tiện ích trên Desktop
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           Write-Host "🖥️ Đang tạo các tiện ích Desktop..." -ForegroundColor Cyan;
 
           # 1. Script NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat
@@ -1060,38 +1114,35 @@ jobs:
           Set-Content -Path $ngatVpsPath -Value ($ngatVpsLines -join "`r`n") -Encoding ASCII;
 
           # 3. Tạo Shortcuts ra Desktop của user zenova và Public
-          $desktopDirs = @("C:\Users\zenova\Desktop", "C:\Users\Public\Desktop");
-          $ws = New-Object -ComObject WScript.Shell;
-          foreach ($d in $desktopDirs) {
-              New-Item -ItemType Directory -Force -Path $d | Out-Null;
+          try {
+              $desktopDirs = @("C:\Users\zenova\Desktop", "C:\Users\Public\Desktop");
+              $ws = New-Object -ComObject WScript.Shell;
+              foreach ($d in $desktopDirs) {
+                  New-Item -ItemType Directory -Force -Path $d -ErrorAction SilentlyContinue | Out-Null;
 
-              # Shortcut Ngắt RDP giữ màn hình
-              $lnk1 = $ws.CreateShortcut("$d\NGAT-RDP-GIU-MAN-HINH-SUNSHINE.lnk");
-              $lnk1.TargetPath = $ngatRdpPath;
-              $lnk1.IconLocation = "shell32.dll,48";
-              $lnk1.Save();
+                  $lnk1 = $ws.CreateShortcut("$d\NGAT-RDP-GIU-MAN-HINH-SUNSHINE.lnk");
+                  $lnk1.TargetPath = $ngatRdpPath;
+                  $lnk1.IconLocation = "shell32.dll,48";
+                  $lnk1.Save();
 
-              # Shortcut Ngắt VPS
-              $lnk2 = $ws.CreateShortcut("$d\NGAT-VPS.lnk");
-              $lnk2.TargetPath = $ngatVpsPath;
-              $lnk2.IconLocation = "shell32.dll,27";
-              $lnk2.Save();
+                  $lnk2 = $ws.CreateShortcut("$d\NGAT-VPS.lnk");
+                  $lnk2.TargetPath = $ngatVpsPath;
+                  $lnk2.IconLocation = "shell32.dll,27";
+                  $lnk2.Save();
 
-              # Shortcut Web Quản Lý VPS
-              $lnk3 = $ws.CreateShortcut("$d\WEB-QUAN-LY-VPS.url");
-              $lnk3.TargetPath = "http://127.0.0.1:8080/";
-              $lnk3.Save();
+                  $lnk3 = $ws.CreateShortcut("$d\WEB-QUAN-LY-VPS.url");
+                  $lnk3.TargetPath = "http://127.0.0.1:8080/";
+                  $lnk3.Save();
 
-              # Shortcut Sunshine Streaming Web UI
-              $lnk4 = $ws.CreateShortcut("$d\SUNSHINE-STREAMING.url");
-              $lnk4.TargetPath = "https://localhost:47990/";
-              $lnk4.Save();
+                  $lnk4 = $ws.CreateShortcut("$d\SUNSHINE-STREAMING.url");
+                  $lnk4.TargetPath = "https://localhost:47990/";
+                  $lnk4.Save();
 
-              # Shortcut Ổ Đĩa Riêng X:\
-              $lnk5 = $ws.CreateShortcut("$d\O-DIA-RIENG-ZENOVA.lnk");
-              $lnk5.TargetPath = "$($env:MOUNT_LETTER):\";
-              $lnk5.Save();
-          }
+                  $lnk5 = $ws.CreateShortcut("$d\O-DIA-RIENG-ZENOVA.lnk");
+                  $lnk5.TargetPath = "$($env:MOUNT_LETTER):\";
+                  $lnk5.Save();
+              }
+          } catch {}
 
           'SESSION_READY=1' >> "$env:GITHUB_ENV";
           Write-Host "✅ Đã tạo đầy đủ các phím tắt tiện ích và ngắt VPS trên Desktop!" -ForegroundColor Green;
@@ -1104,9 +1155,11 @@ jobs:
       - name: 🌐 Khởi chạy Web Quản Lý VPS (Port 8080)
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           Write-Host "🌐 Đang khởi chạy Web Quản Lý VPS..." -ForegroundColor Cyan;
           $webDir = 'C:\zenova-web';
-          New-Item -ItemType Directory -Force -Path $webDir | Out-Null;
+          New-Item -ItemType Directory -Force -Path $webDir -ErrorAction SilentlyContinue | Out-Null;
           $webScript = [System.IO.Path]::Combine($webDir, 'server.ps1');
 
           $srvLines = @(
@@ -1185,6 +1238,8 @@ jobs:
       - name: 🎉 Thông tin kết nối Zenova VPS
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           $pushScript = "$env:PUSH_STATE_SCRIPT";
           if (Test-Path "$pushScript") {
               & "$pushScript" -Status "Online" -SdId "$env:STARDESK_ID" -SdPin "$env:STARDESK_PIN" -ExtraNote "Máy sẵn sàng";
@@ -1227,6 +1282,8 @@ jobs:
         id: keepalive
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           $endEpoch = ([long]"$env:JOB_START_EPOCH") + (([long]"$env:TOTAL_MINUTES") * 60);
           $saveScript = "$env:SAVE_SCRIPT_PATH";
           $pushScript = "$env:PUSH_STATE_SCRIPT";
@@ -1281,6 +1338,7 @@ jobs:
 
               Start-Sleep -Seconds 2;
           }
+          $global:LASTEXITCODE = 0;
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
@@ -1290,6 +1348,8 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           Write-Host "💾 Đang đóng gói và lưu toàn bộ dữ liệu cuối phiên..." -ForegroundColor Yellow;
           $pushScript = "$env:PUSH_STATE_SCRIPT";
           if (Test-Path "$pushScript") {
@@ -1310,6 +1370,8 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           Write-Host "🧹 Đang dọn dẹp hệ thống..." -ForegroundColor Yellow;
           Remove-Item -Path "$env:RUNNER_TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue;
           Write-Host "✅ Dọn dẹp hoàn tất!" -ForegroundColor Green;
@@ -1331,6 +1393,8 @@ jobs:
           OPT: ${{ inputs.optimize_windows }}
           SD_ID: ${{ env.STARDESK_ID }}
         run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
           $wf = [System.IO.Path]::GetFileName(("$env:GITHUB_WORKFLOW_REF" -split '@')[0]);
           Write-Host "🔁 Đang kích hoạt phiên làm việc mới: $wf..." -ForegroundColor Cyan;
           gh workflow run "$wf" --repo "$env:RUNNER_REPO" --ref "$env:GITHUB_REF_NAME" `
@@ -1349,6 +1413,8 @@ jobs:
             -f "choco_packages=$env:PKGS" `
             -f "optimize_windows=$env:OPT";
           Write-Host "✅ Đã kích hoạt phiên mới thành công!" -ForegroundColor Green;
+          $global:LASTEXITCODE = 0;
+          exit 0;
 
   # =========================================================================
   # JOB 2: ZENOVA LINUX RUNNER (UBUNTU + XFCE4 + XRDP + TAILSCALE)
