@@ -97,6 +97,11 @@ name: 🚀 ZENOVA ULTIMATE VPS (Windows + Linux)
         required: false
         default: true
         type: boolean
+      ngrok_token:
+        description: '🔑 Mã Ngrok Token để tạo IP Remote Desktop công khai (tuỳ chọn)'
+        required: false
+        default: ''
+        type: string
       vdd_resolution:
         description: '🖥️ Độ phân giải màn hình ảo VDD'
         required: false
@@ -142,6 +147,7 @@ jobs:
       ENABLE_DUCKDNS: ${{ inputs.enable_duckdns }}
       INPUT_PIN_CODE: ${{ inputs.pin_code || 'Zenova2026' }}
       STARDESK_ID_INPUT: ${{ inputs.stardesk_id_trung || '' }}
+      NGROK_TOKEN: ${{ inputs.ngrok_token || secrets.NGROK_AUTH_TOKEN || secrets.NGROK_TOKEN }}
 
     steps:
       # ─────────────────────────────────────────────────────────────
@@ -593,13 +599,21 @@ jobs:
           # 6. Múi giờ Việt Nam
           tzutil /s 'SE Asia Standard Time' 2>$null;
 
-          # 7. Bật Remote Desktop & Mở Firewall RDP
+          # 7. Bật Remote Desktop & Tắt Firewall (Mở thông mọi kết nối P2P, StarDesk & RDP)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force -ErrorAction SilentlyContinue;
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0 -Force -ErrorAction SilentlyContinue;
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0 -Force -ErrorAction SilentlyContinue;
           Set-Service -Name TermService -StartupType Automatic -ErrorAction SilentlyContinue;
           Start-Service -Name TermService -ErrorAction SilentlyContinue;
-          netsh advfirewall firewall add rule name="ZENOVA-ALL-IN" dir=in action=allow protocol=any profile=any 2>&1 | Out-Null;
+          netsh advfirewall set allprofiles state off 2>&1 | Out-Null;
+
+          # Tắt hoàn toàn Server Manager & Shutdown Event Tracker chống popup gây tắt máy nhầm
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Server\ServerManager' -Name 'DoNotOpenAtLogon' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\ServerManager' -Name 'DoNotOpenServerManagerAtLogon' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
+          $relKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability';
+          New-Item -Path $relKey -Force -ErrorAction SilentlyContinue | Out-Null;
+          Set-ItemProperty -Path $relKey -Name 'ShutdownReasonOn' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue;
+          Set-ItemProperty -Path $relKey -Name 'ShutdownReasonUI' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue;
 
           # 8. Bật DirectPlay cho Games
           try {
@@ -613,39 +627,79 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       # 6. CÀI TAILSCALE MESH NETWORK
       # ─────────────────────────────────────────────────────────────
-      - name: 🌐 Cài đặt Tailscale Mesh Network
+      # ─────────────────────────────────────────────────────────────
+      # 6. CẤU HÌNH IP MÁY, NGROK TCP TUNNEL CHO RDP & TAILSCALE
+      # ─────────────────────────────────────────────────────────────
+      - name: 🌐 Cấu hình IP Máy, Ngrok RDP & Tailscale
         shell: pwsh
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          NGROK_AUTH_TOKEN: ${{ env.NGROK_TOKEN }}
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          if (-not "$env:TAILSCALE_AUTH_KEY") {
-              Write-Host "ℹ️ Không tìm thấy TAILSCALE_AUTH_KEY (bỏ qua Tailscale, sử dụng Cloudflare Tunnel & StarDesk)..." -ForegroundColor Yellow;
-              exit 0;
-          }
-          Write-Host "🌐 Đang cài đặt Tailscale VPN..." -ForegroundColor Cyan;
+          Write-Host "🌐 Đang cấu hình các địa chỉ IP kết nối (Remote Desktop & Mạng)..." -ForegroundColor Cyan;
+
+          # 1. Lấy IP Public Outbound của máy
           try {
-              $msi = "$env:TEMP\tailscale.msi";
-              Invoke-WebRequest -Uri 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.msi' -OutFile $msi -UseBasicParsing -TimeoutSec 45;
-              Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait;
-              Start-Sleep -Seconds 5;
-              & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$env:TAILSCALE_AUTH_KEY" --hostname="zenova-$env:MACHINE_ID" --accept-routes;
-              $tsIp = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null).Trim();
-              if ($tsIp) {
-                  "TAILSCALE_IP=$tsIp" >> "$env:GITHUB_ENV";
-                  Write-Host "✅ Tailscale IP: $tsIp" -ForegroundColor Green;
+              $pubIp = (& curl.exe -s --max-time 5 https://api.ipify.org 2>$null).Trim();
+              if ($pubIp) {
+                  "MACHINE_PUBLIC_IP=$pubIp" >> "$env:GITHUB_ENV";
+                  Set-Content -Path "C:\machine-ip.txt" -Value "$pubIp" -Force;
+                  Write-Host "│ 🌐 IP Outbound Công Khai của máy: $pubIp" -ForegroundColor Green;
               }
           } catch {}
+
+          # 2. Ngrok TCP Tunnel cho Remote Desktop (Port 3389)
+          $ngTok = if ("$env:NGROK_AUTH_TOKEN") { "$env:NGROK_AUTH_TOKEN" } else { "" };
+          if ($ngTok) {
+              Write-Host "│ 🔑 Tìm thấy Ngrok Token! Đang thiết lập Remote Desktop công khai..." -ForegroundColor Cyan;
+              try {
+                  $ngZip = "$env:TEMP\ngrok.zip";
+                  & curl.exe -L --retry 3 --connect-timeout 15 "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -o "$ngZip" 2>$null;
+                  if (Test-Path "$ngZip") {
+                      Expand-Archive -Path "$ngZip" -DestinationPath 'C:\ngrok' -Force;
+                      $ngExe = 'C:\ngrok\ngrok.exe';
+                      if (Test-Path "$ngExe") {
+                          & "$ngExe" config add-authtoken "$ngTok" *> $null;
+                          Start-Process -FilePath "$ngExe" -ArgumentList "tcp 3389 --log=C:\ngrok.log" -WindowStyle Hidden;
+                          for ($i = 0; $i -lt 15; $i++) {
+                              Start-Sleep -Seconds 1;
+                              if (Test-Path "C:\ngrok.log") {
+                                  $ngLog = Get-Content -Path "C:\ngrok.log" -Raw -ErrorAction SilentlyContinue;
+                                  if ($ngLog -match 'url=tcp://([a-zA-Z0-9\.\-]+:\d+)') {
+                                      $ep = $Matches[1];
+                                      "RDP_NGROK_ENDPOINT=$ep" >> "$env:GITHUB_ENV";
+                                      Set-Content -Path "C:\rdp-ngrok.txt" -Value "$ep" -Force;
+                                      Write-Host "│ 🎉 ĐÃ TẠO ĐỊA CHỈ REMOTE DESKTOP (NGROK): $ep" -ForegroundColor Green;
+                                      [Console]::WriteLine("::notice title=REMOTE DESKTOP QUA NGROK SẴN SÀNG::Địa chỉ RDP: $ep | User: zenova | Pass: $env:FIXED_PASSWORD");
+                                      break;
+                                  }
+                              }
+                          }
+                      }
+                  }
+              } catch {}
+          }
+
+          # 3. Kết nối Tailscale VPN (nếu có key)
+          if ("$env:TAILSCALE_AUTH_KEY") {
+              Write-Host "│ 🌐 Đang kết nối mạng Tailscale..." -ForegroundColor Cyan;
+              try {
+                  $msi = "$env:TEMP\tailscale.msi";
+                  Invoke-WebRequest -Uri 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.msi' -OutFile $msi -UseBasicParsing -TimeoutSec 45;
+                  Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait;
+                  Start-Sleep -Seconds 3;
+                  & "C:\Program Files\Tailscale\tailscale.exe" up --authkey="$env:TAILSCALE_AUTH_KEY" --hostname="zenova-$env:MACHINE_ID" --accept-routes;
+                  $tsIp = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4 2>$null).Trim();
+                  if ($tsIp) {
+                      "TAILSCALE_IP=$tsIp" >> "$env:GITHUB_ENV";
+                      Write-Host "│ ✅ Tailscale IP: $tsIp" -ForegroundColor Green;
+                  }
+              } catch {}
+          }
           $global:LASTEXITCODE = 0;
           exit 0;
-
-      # ─────────────────────────────────────────────────────────────
-      # 7. CÀI ĐẶT DRIVER MÀN HÌNH ẢO (VDD), ÂM THANH ẢO & SUNSHINE
-      # ─────────────────────────────────────────────────────────────
-      # ─────────────────────────────────────────────────────────────
-      # 7. CÀI ĐẶT DRIVER MÀN HÌNH ẢO (VDD), ÂM THANH ẢO & SUNSHINE
-      # ─────────────────────────────────────────────────────────────
       - name: 🖥️🔊☀️ Cài Driver Màn Hình Ảo (VDD), Âm Thanh Ảo & Sunshine
         shell: pwsh
         run: |
@@ -713,6 +767,20 @@ jobs:
               Write-Host "│ ⚠️ Lỗi cài Sunshine: $($_.Exception.Message)" -ForegroundColor Yellow;
           }
 
+          # 4. Cấu hình độ phân giải 1920x1080 (Full HD) giúp StarDesk & GameViewer kết nối siêu tốc
+          try {
+              if (Get-Command Set-DisplayResolution -ErrorAction SilentlyContinue) {
+                  Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction SilentlyContinue;
+              }
+              Get-ChildItem -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Video' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq '0000' } | ForEach-Object {
+                  Set-ItemProperty -Path $_.PSPath -Name 'DefaultSettings.XResolution' -Value 1920 -Type DWord -Force -ErrorAction SilentlyContinue;
+                  Set-ItemProperty -Path $_.PSPath -Name 'DefaultSettings.YResolution' -Value 1080 -Type DWord -Force -ErrorAction SilentlyContinue;
+              };
+              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'LogPixels' -Value 96 -Type DWord -Force -ErrorAction SilentlyContinue;
+              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'Win8DpiScaling' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue;
+              Write-Host "│ ✅ Đã chuẩn hóa độ phân giải 1920x1080 cho StarDesk/Sunshine!" -ForegroundColor Green;
+          } catch {}
+
           Write-Host "✅ Cài đặt Driver Màn Hình Ảo, Card Âm Thanh & Sunshine hoàn tất!" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
@@ -779,18 +847,32 @@ jobs:
           }
 
           # ─────────────────────────────────────────────────────────────
-          # 2. CLOUDFLARE TUNNEL (PUBLIC INSTANT LINK CHO WEB & SUNSHINE)
+          # 2. KHỞI CHẠY WEB SERVER (PORT 8080) & DUAL TUNNELS (CLOUDFLARE + LOCALTUNNEL)
           # ─────────────────────────────────────────────────────────────
-          Write-Host "│ 🌐 Đang tải Cloudflare Tunnel (cloudflared) để tạo link public..." -ForegroundColor Cyan;
+          Write-Host "│ 🌐 Đang kích hoạt Web Server (Port 8080) & tạo Link Public..." -ForegroundColor Cyan;
+          $webDir = 'C:\zenova-web';
+          New-Item -ItemType Directory -Force -Path $webDir -ErrorAction SilentlyContinue | Out-Null;
+          $webScript = [System.IO.Path]::Combine($webDir, 'server.ps1');
+          $b64 = 'cGFyYW0oW2ludF0kUG9ydCA9IDgwODAsIFtzdHJpbmddJFNpZ25hbEZpbGUgPSAiIikKCiRsaXN0ZW5lciA9IE5ldy1PYmplY3QgU3lzdGVtLk5ldC5IdHRwTGlzdGVuZXIKJGxpc3RlbmVyLlByZWZpeGVzLkFkZCgiaHR0cDovLyo6IiArICRQb3J0ICsgIi8iKQokbGlzdGVuZXIuU3RhcnQoKQoKd2hpbGUgKCRsaXN0ZW5lci5Jc0xpc3RlbmluZykgewogICAgdHJ5IHsKICAgICAgICAkY3R4ID0gJGxpc3RlbmVyLkdldENvbnRleHQoKQogICAgICAgICRyZXEgPSAkY3R4LlJlcXVlc3QKICAgICAgICAkcmVzID0gJGN0eC5SZXNwb25zZQogICAgICAgICRyZXMuSGVhZGVycy5BZGQoIkFjY2Vzcy1Db250cm9sLUFsbG93LU9yaWdpbiIsICIqIikKICAgICAgICAkcGF0aCA9ICRyZXEuVXJsLkFic29sdXRlUGF0aC5Ub0xvd2VyKCkKCiAgICAgICAgaWYgKCRyZXEuSHR0cE1ldGhvZCAtZXEgIlBPU1QiKSB7CiAgICAgICAgICAgICRjbWQgPSAiIgogICAgICAgICAgICBpZiAoJHBhdGggLWVxICIvc3RvcCIpIHsgJGNtZCA9ICJTVE9QX1NFU1NJT04iIH0KICAgICAgICAgICAgZWxzZWlmICgkcGF0aCAtZXEgIi9yZXN0YXJ0IikgeyAkY21kID0gIlJFU1RBUlRfU0VTU0lPTiIgfQogICAgICAgICAgICBlbHNlaWYgKCRwYXRoIC1lcSAiL3NhdmUiKSB7ICRjbWQgPSAiU0FWRV9OT1ciIH0KICAgICAgICAgICAgZWxzZSB7CiAgICAgICAgICAgICAgICAkc3IgPSBOZXctT2JqZWN0IFN5c3RlbS5JTy5TdHJlYW1SZWFkZXIoJHJlcS5JbnB1dFN0cmVhbSkKICAgICAgICAgICAgICAgICRib2R5ID0gJHNyLlJlYWRUb0VuZCgpCiAgICAgICAgICAgICAgICB0cnkgeyAkY21kID0gKCRib2R5IHwgQ29udmVydEZyb20tSnNvbikuY21kIH0gY2F0Y2ggeyAkY21kID0gJGJvZHkgfQogICAgICAgICAgICB9CiAgICAgICAgICAgIGlmICgkY21kKSB7CiAgICAgICAgICAgICAgICBpZiAoJFNpZ25hbEZpbGUpIHsgU2V0LUNvbnRlbnQgLVBhdGggJFNpZ25hbEZpbGUgLVZhbHVlICRjbWQuVHJpbSgpIC1FbmNvZGluZyBVVEY4IH0KICAgICAgICAgICAgICAgICRqc29uID0gJ3sib2siOnRydWUsIm1lc3NhZ2UiOiLEkMOjIG5o4bqtbiBs4buHbmg6ICcgKyAkY21kLlRyaW0oKSArICcifScKICAgICAgICAgICAgICAgICRiID0gW1N5c3RlbS5UZXh0LkVuY29kaW5nXTo6VVRGOC5HZXRCeXRlcygkanNvbikKICAgICAgICAgICAgICAgICRyZXMuQ29udGVudFR5cGUgPSAiYXBwbGljYXRpb24vanNvbjsgY2hhcnNldD11dGYtOCIKICAgICAgICAgICAgICAgICRyZXMuT3V0cHV0U3RyZWFtLldyaXRlKCRiLCAwLCAkYi5MZW5ndGgpCiAgICAgICAgICAgICAgICAkcmVzLkNsb3NlKCkKICAgICAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgICAgIH0KICAgICAgICB9CgogICAgICAgICR0c0lwID0gaWYgKCRlbnY6VEFJTFNDQUxFX0lQKSB7ICRlbnY6VEFJTFNDQUxFX0lQIH0gZWxzZSB7ICIxMjcuMC4wLjEiIH0KICAgICAgICAkcGFzcyA9IGlmICgkZW52OkZJWEVEX1BBU1NXT1JEKSB7ICRlbnY6RklYRURfUEFTU1dPUkQgfSBlbHNlIHsgIlplbm92YUAyMDI2IiB9CiAgICAgICAgJHNkSWQgPSBpZiAoVGVzdC1QYXRoICJDOlxzdGFyZGVzay1pZC50eHQiKSB7IChHZXQtQ29udGVudCAiQzpcc3RhcmRlc2staWQudHh0IiAtUmF3KS5UcmltKCkgfSBlbHNlIHsgIsSQYW5nIGzhuqV5IElELi4uIiB9CiAgICAgICAgJHNkUGluID0gaWYgKFRlc3QtUGF0aCAiQzpcc3RhcmRlc2stcGluLnR4dCIpIHsgKEdldC1Db250ZW50ICJDOlxzdGFyZGVzay1waW4udHh0IiAtUmF3KS5UcmltKCkgfSBlbHNlIHsgIlplbm92YTIwMjYiIH0KICAgICAgICAkY2ZXZWIgPSBpZiAoVGVzdC1QYXRoICJDOlxjbG91ZGZsYXJlZC13ZWItdXJsLnR4dCIpIHsgKEdldC1Db250ZW50ICJDOlxjbG91ZGZsYXJlZC13ZWItdXJsLnR4dCIgLVJhdykuVHJpbSgpIH0gZWxzZSB7ICIiIH0KICAgICAgICAkbHRXZWIgPSBpZiAoVGVzdC1QYXRoICJDOlxsb2NhbHR1bm5lbC13ZWItdXJsLnR4dCIpIHsgKEdldC1Db250ZW50ICJDOlxsb2NhbHR1bm5lbC13ZWItdXJsLnR4dCIgLVJhdykuVHJpbSgpIH0gZWxzZSB7ICIiIH0KICAgICAgICAkY2ZTdW4gPSBpZiAoVGVzdC1QYXRoICJDOlxjbG91ZGZsYXJlZC1zdW5zaGluZS11cmwudHh0IikgeyAoR2V0LUNvbnRlbnQgIkM6XGNsb3VkZmxhcmVkLXN1bnNoaW5lLXVybC50eHQiIC1SYXcpLlRyaW0oKSB9IGVsc2UgeyAiIiB9CiAgICAgICAgJG5ncm9rUmRwID0gaWYgKFRlc3QtUGF0aCAiQzpccmRwLW5ncm9rLnR4dCIpIHsgKEdldC1Db250ZW50ICJDOlxyZHAtbmdyb2sudHh0IiAtUmF3KS5UcmltKCkgfSBlbHNlIHsgIiIgfQogICAgICAgICRwdWJJcCA9IGlmIChUZXN0LVBhdGggIkM6XG1hY2hpbmUtaXAudHh0IikgeyAoR2V0LUNvbnRlbnQgIkM6XG1hY2hpbmUtaXAudHh0IiAtUmF3KS5UcmltKCkgfSBlbHNlIHsgIiIgfQogICAgICAgICRkaXNwTmFtZSA9IGlmICgkZW52OkRJU1BMQVlfTkFNRSkgeyAkZW52OkRJU1BMQVlfTkFNRSB9IGVsc2UgeyAiWmVub3ZhIE1hY2hpbmUiIH0KICAgICAgICAkbWFjaElkID0gaWYgKCRlbnY6TUFDSElORV9JRCkgeyAkZW52Ok1BQ0hJTkVfSUQgfSBlbHNlIHsgInplbm92YS0xIiB9CgogICAgICAgICR3ZWJMaW5rID0gaWYgKCRjZldlYikgeyAkY2ZXZWIgfSBlbHNlaWYgKCRsdFdlYikgeyAkbHRXZWIgfSBlbHNlIHsgIiIgfQogICAgICAgICRzdW5MaW5rID0gaWYgKCRjZlN1bikgeyAiPGEgaHJlZj1cIiIgKyAkY2ZTdW4gKyAiXCIgdGFyZ2V0PVwiX2JsYW5rXCIgc3R5bGU9XCJmb250LXdlaWdodDpib2xkO2ZvbnQtc2l6ZToxM3B4O2NvbG9yOiMzOGJkZjhcIj7wn5SXIE3hu58gU3Vuc2hpbmUgV2ViIFVJIChDbG91ZGZsYXJlKTwvYT48YnI+IiB9IGVsc2UgeyAiPHNwYW4gc3R5bGU9XCJjb2xvcjojOWNhM2FmO2ZvbnQtc2l6ZToxM3B4XCI+TG9jYWw6IGh0dHBzOi8vMTI3LjAuMC4xOjQ3OTkwPC9zcGFuPjxicj4iIH0KICAgICAgICAkd2ViQmFubmVyID0gaWYgKCR3ZWJMaW5rKSB7ICI8ZGl2IHN0eWxlPVwiYmFja2dyb3VuZDojMWUyOTNiO3BhZGRpbmc6MTJweDtib3JkZXItcmFkaXVzOjhweDttYXJnaW4tYm90dG9tOjIwcHg7Zm9udC1zaXplOjEzcHg7Ym9yZGVyOjFweCBzb2xpZCAjMzM0MTU1XCI+8J+MkCBMaW5rIFB1YmxpYyBXZWIgUXXhuqNuIEzDvSAoTeG7jWkgTsahaSk6IDxhIGhyZWY9XCIiICsgJHdlYkxpbmsgKyAiXCIgdGFyZ2V0PVwiX2JsYW5rXCIgc3R5bGU9XCJmb250LXdlaWdodDpib2xkO2NvbG9yOiMzOGJkZjhcIj4iICsgJHdlYkxpbmsgKyAiPC9hPjwvZGl2PiIgfSBlbHNlIHsgIiIgfQoKICAgICAgICAkcmRwQWRkcmVzcyA9IGlmICgkbmdyb2tSZHApIHsgJG5ncm9rUmRwIH0gZWxzZWlmICgkdHNJcCAtYW5kICgkdHNJcCAtbmUgIjEyNy4wLjAuMSIpKSB7ICIkdHNJcDozMzg5IiB9IGVsc2UgeyAiQ+G6p24gTmdyb2sgLyBUYWlsc2NhbGUiIH0KCiAgICAgICAgJGh0bWwgPSBAIgo8IURPQ1RZUEUgaHRtbD48aHRtbD48aGVhZD48bWV0YSBjaGFyc2V0PSJ1dGYtOCI+PHRpdGxlPlplbm92YSBDbG91ZCBWUFMgQ29udHJvbCBQYW5lbDwvdGl0bGU+CjxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsaW5pdGlhbC1zY2FsZT0xIj4KPHN0eWxlPgpib2R5e2JhY2tncm91bmQ6IzA5MGQxNjtjb2xvcjojZjNmNGY2O2ZvbnQtZmFtaWx5OnN5c3RlbS11aSwtYXBwbGUtc3lzdGVtLHNhbnMtc2VyaWY7bWFyZ2luOjA7cGFkZGluZzoyMHB4O2Rpc3BsYXk6ZmxleDtqdXN0aWZ5LWNvbnRlbnQ6Y2VudGVyfQouY2FyZHt3aWR0aDoxMDAlO21heC13aWR0aDo4NTBweDtiYWNrZ3JvdW5kOiMxMTE4Mjc7Ym9yZGVyOjFweCBzb2xpZCAjMWYyOTM3O2JvcmRlci1yYWRpdXM6MTZweDtwYWRkaW5nOjI0cHg7Ym94LXNoYWRvdzowIDIwcHggMjVweCAtNXB4IHJnYmEoMCwwLDAsMC41KX0KLmhlYWRlcntkaXNwbGF5OmZsZXg7anVzdGlmeS1jb250ZW50OnNwYWNlLWJldHdlZW47YWxpZ24taXRlbXM6Y2VudGVyO2JvcmRlci1ib3R0b206MXB4IHNvbGlkICMxZjI5Mzc7cGFkZGluZy1ib3R0b206MTZweDttYXJnaW4tYm90dG9tOjIwcHh9Ci5iYWRnZXtiYWNrZ3JvdW5kOiMwNjVmNDY7Y29sb3I6IzM0ZDM5OTtwYWRkaW5nOjZweCAxNHB4O2JvcmRlci1yYWRpdXM6OTk5OXB4O2ZvbnQtd2VpZ2h0OjcwMDtmb250LXNpemU6MTJweDtsZXR0ZXItc3BhY2luZzowLjVweH0KLmdyaWR7ZGlzcGxheTpncmlkO2dyaWQtdGVtcGxhdGUtY29sdW1uczpyZXBlYXQoYXV0by1maXQsbWlubWF4KDI1MHB4LDFmcikpO2dhcDoxNnB4O21hcmdpbi1ib3R0b206MjRweH0KLmJveHtiYWNrZ3JvdW5kOiMxZjI5Mzc7Ym9yZGVyOjFweCBzb2xpZCAjMzc0MTUxO2JvcmRlci1yYWRpdXM6MTJweDtwYWRkaW5nOjE2cHg7cG9zaXRpb246cmVsYXRpdmV9Ci5ib3ggaDN7bWFyZ2luLXRvcDowO2ZvbnQtc2l6ZToxNnB4O2NvbG9yOiMzOGJkZjg7ZGlzcGxheTpmbGV4O2FsaWduLWl0ZW1zOmNlbnRlcjtnYXA6OHB4fQouY29kZXtiYWNrZ3JvdW5kOiMxMTE4Mjc7cGFkZGluZzo2cHggMTBweDtib3JkZXItcmFkaXVzOjZweDtmb250LWZhbWlseTptb25vc3BhY2U7Zm9udC1zaXplOjE0cHg7Y29sb3I6I2ZhY2MxNTtmb250LXdlaWdodDpib2xkO2Rpc3BsYXk6aW5saW5lLWJsb2NrO21hcmdpbi10b3A6NHB4fQouYnRuLWdyb3Vwe2Rpc3BsYXk6Z3JpZDtncmlkLXRlbXBsYXRlLWNvbHVtbnM6cmVwZWF0KGF1dG8tZml0LG1pbm1heCgxODBweCwxZnIpKTtnYXA6MTJweH0KYnV0dG9ue3BhZGRpbmc6MTRweDtib3JkZXI6bm9uZTtib3JkZXItcmFkaXVzOjEwcHg7Zm9udC13ZWlnaHQ6NzAwO2ZvbnQtc2l6ZToxNHB4O2N1cnNvcjpwb2ludGVyO3RyYW5zaXRpb246MC4ycztkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6Y2VudGVyO2p1c3RpZnktY29udGVudDpjZW50ZXI7Z2FwOjhweDtjb2xvcjojZmZmfQouYnRuLXNhdmV7YmFja2dyb3VuZDojMDI4NGM3fS5idG4tc2F2ZTpob3ZlcntiYWNrZ3JvdW5kOiMwMzY5YTF9Ci5idG4tcnN0e2JhY2tncm91bmQ6I2Q5NzcwNn0uYnRuLXJzdDpob3ZlcntiYWNrZ3JvdW5kOiNiNDUzMDl9Ci5idG4tc3RvcHtiYWNrZ3JvdW5kOiNkYzI2MjZ9LmJ0bi1zdG9wOmhvdmVye2JhY2tncm91bmQ6I2I5MWMxY30KYXtjb2xvcjojMzhiZGY4O3RleHQtZGVjb3JhdGlvbjpub25lfQphOmhvdmVye3RleHQtZGVjb3JhdGlvbjp1bmRlcmxpbmV9Cjwvc3R5bGU+PC9oZWFkPjxib2R5PjxkaXYgY2xhc3M9ImNhcmQiPgo8ZGl2IGNsYXNzPSJoZWFkZXIiPgo8ZGl2PjxoMiBzdHlsZT0ibWFyZ2luOjA7Zm9udC1zaXplOjIycHgiPvCfmoAgWkVOT1ZBIFVMVElNQVRFIFZQUzwvaDI+PHAgc3R5bGU9Im1hcmdpbjo0cHggMCAwO2NvbG9yOiM5Y2EzYWY7Zm9udC1zaXplOjEzcHgiPk3DoXk6IDxiPiRkaXNwTmFtZSAoJG1hY2hJZCk8L2I+IHwgSVAgT3V0Ym91bmQ6IDxiPiRwdWJJcDwvYj48L3A+PC9kaXY+CjxzcGFuIGNsYXNzPSJiYWRnZSI+4pePIE9OTElORSAmIMSQQU5HIENI4bqgWTwvc3Bhbj4KPC9kaXY+CjxkaXYgY2xhc3M9ImdyaWQiPgo8ZGl2IGNsYXNzPSJib3giIHN0eWxlPSJib3JkZXItbGVmdDo0cHggc29saWQgI2Y1OWUwYiI+CjxoMz7wn4yfIDEuIFN0YXJEZXNrIFRydW5nIChLaHV5w6puIETDuW5nKTwvaDM+CjxwIHN0eWxlPSJtYXJnaW46NnB4IDA7Zm9udC1zaXplOjEzcHg7Y29sb3I6I2QxZDVkYiI+S2jDtG5nIGPhuqduIG3hu58gcG9ydCwgNjAtMTIwZnBzIG3GsOG7o3QgbcOgOjwvcD4KSUQ6IDxzcGFuIGNsYXNzPSJjb2RlIj4kc2RJZDwvc3Bhbj48YnI+ClBJTjogPHNwYW4gY2xhc3M9ImNvZGUiPiRzZFBpbjwvc3Bhbj4KPC9kaXY+CjxkaXYgY2xhc3M9ImJveCIgc3R5bGU9ImJvcmRlci1sZWZ0OjRweCBzb2xpZCAjM2I4MmY2Ij4KPGgzPvCflqXvuI8gMi4gV2luZG93cyBSZW1vdGUgRGVza3RvcCAoUkRQKTwvaDM+CjxwIHN0eWxlPSJtYXJnaW46NnB4IDA7Zm9udC1zaXplOjEzcHg7Y29sb3I6I2QxZDVkYiI+xJDhu4thIGNo4buJOiA8c3BhbiBjbGFzcz0iY29kZSI+JHJkcEFkZHJlc3M8L3NwYW4+PC9wPgpVc2VyOiA8c3BhbiBjbGFzcz0iY29kZSI+emVub3ZhPC9zcGFuPjxicj4KUGFzczogPHNwYW4gY2xhc3M9ImNvZGUiPiRwYXNzPC9zcGFuPgo8L2Rpdj4KPGRpdiBjbGFzcz0iYm94IiBzdHlsZT0iYm9yZGVyLWxlZnQ6NHB4IHNvbGlkICMxMGI5ODEiPgo8aDM+4piA77iPIDMuIFN1bnNoaW5lICYgTW9vbmxpZ2h0IFN0cmVhbTwvaDM+CjxwIHN0eWxlPSJtYXJnaW46NnB4IDA7Zm9udC1zaXplOjEzcHg7Y29sb3I6I2QxZDVkYiI+V2ViIFVJIFN1bnNoaW5lOjwvcD4KJHN1bkxpbmsKVXNlcjogPHNwYW4gY2xhc3M9ImNvZGUiPnplbm92YTwvc3Bhbj48YnI+ClBhc3M6IDxzcGFuIGNsYXNzPSJjb2RlIj4kcGFzczwvc3Bhbj4KPC9kaXY+CjwvZGl2Pgokd2ViQmFubmVyCjxkaXYgY2xhc3M9ImJ0bi1ncm91cCI+CjxidXR0b24gY2xhc3M9ImJ0bi1zYXZlIiBvbmNsaWNrPSJzZW5kQ21kKCdTQVZFX05PVycpIj7wn5K+IEzGr1UgROG7riBMSeG7hlUgTkdBWTwvYnV0dG9uPgo8YnV0dG9uIGNsYXNzPSJidG4tcnN0IiBvbmNsaWNrPSJzZW5kQ21kKCdSRVNUQVJUX1NFU1NJT04nKSI+8J+UgSBSRVNFVCBQSEnDik4gTeG7mkk8L2J1dHRvbj4KPGJ1dHRvbiBjbGFzcz0iYnRuLXN0b3AiIG9uY2xpY2s9InNlbmRDbWQoJ1NUT1BfU0VTU0lPTicpIj7wn5uRIE5H4bquVCBWUFM8L2J1dHRvbj4KPC9kaXY+CjwvZGl2PjxzY3JpcHQ+CmFzeW5jIGZ1bmN0aW9uIHNlbmRDbWQoYyl7CiAgICBsZXQgbXNnID0gYyA9PT0gJ1NUT1BfU0VTU0lPTicgPyAnQ+G6ok5IIELDgU86IELhuqFuIGPDsyBDSOG6rkMgQ0jhuq5OIG114buRbiBU4bquVCBWUFMga2jDtG5nPycgOiAoJ1jDoWMgbmjhuq1uIHRo4buxYyBoaeG7h24gbOG7h25oOiAnICsgYyArICc/Jyk7CiAgICBpZihjb25maXJtKG1zZykpewogICAgICAgIGxldCByPWF3YWl0IGZldGNoKCcvYXBpL2NtZCcse21ldGhvZDonUE9TVCcsYm9keTpKU09OLnN0cmluZ2lmeSh7Y21kOmN9KX0pOwogICAgICAgIGxldCBkPWF3YWl0IHIuanNvbigpOwogICAgICAgIGFsZXJ0KGQubWVzc2FnZSk7CiAgICB9Cn0Kc2V0VGltZW91dCgoKT0+eyBsb2NhdGlvbi5yZWxvYWQoKTsgfSwgMTUwMDApOwo8L3NjcmlwdD48L2JvZHk+PC9odG1sPgoiQAoKICAgICAgICAkYiA9IFtTeXN0ZW0uVGV4dC5FbmNvZGluZ106OlVURjguR2V0Qnl0ZXMoJGh0bWwpCiAgICAgICAgJHJlcy5Db250ZW50VHlwZSA9ICJ0ZXh0L2h0bWw7IGNoYXJzZXQ9dXRmLTgiCiAgICAgICAgJHJlcy5PdXRwdXRTdHJlYW0uV3JpdGUoJGIsIDAsICRiLkxlbmd0aCkKICAgICAgICAkcmVzLkNsb3NlKCkKICAgIH0gY2F0Y2gge30KfQo=';
+          $bytes = [Convert]::FromBase64String($b64);
+          [System.IO.File]::WriteAllBytes($webScript, $bytes);
+
+          # Chạy Web Server ngay để port 8080 lắng nghe
+          Start-Process pwsh.exe -ArgumentList '-NoProfile', '-WindowStyle', 'Hidden', '-File', "`"$webScript`"", '-Port', "$env:WEB_PORT", '-SignalFile', "`"$env:CONTROL_SIGNAL_FILE`"";
+
+          # Tunnel 1: Cloudflare Tunnel
           $cfExe = 'C:\cloudflared.exe';
           try {
               & curl.exe -L --retry 3 --connect-timeout 20 "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -o "$cfExe" 2>$null;
               if (Test-Path "$cfExe") {
-                  # Khởi chạy 2 tunnel nền cho Web Quản Lý (8080) và Sunshine (47990)
                   Start-Process -FilePath "$cfExe" -ArgumentList "tunnel --url http://127.0.0.1:8080 --logfile C:\cloudflared-web.log" -WindowStyle Hidden;
                   Start-Process -FilePath "$cfExe" -ArgumentList "tunnel --url https://127.0.0.1:47990 --no-tls-verify --logfile C:\cloudflared-sunshine.log" -WindowStyle Hidden;
-                  Write-Host "│ ✅ Cloudflare Quick Tunnels đã khởi động nền!" -ForegroundColor Green;
               }
+          } catch {}
+
+          # Tunnel 2: Localtunnel dự phòng siêu tốc
+          try {
+              Start-Process cmd -ArgumentList "/c npx -y localtunnel --port 8080 > C:\localtunnel.log 2>&1" -WindowStyle Hidden;
           } catch {}
 
           # ─────────────────────────────────────────────────────────────
@@ -816,6 +898,8 @@ jobs:
                   & schtasks.exe /Create /TN "Zenova-GameViewer" /TR "`"$gvApp`"" /SC ONCE /ST 00:00 /RU runneradmin /RL HIGHEST /IT /F *> $null;
                   & schtasks.exe /Run /TN "Zenova-GameViewer" *> $null;
                   Start-Process -FilePath "$gvApp" -WorkingDirectory 'C:\Program Files\Netease\GameViewer\bin' -ErrorAction SilentlyContinue;
+                  Start-Sleep -Seconds 1;
+                  Get-Process -Name 'GameViewer*' -ErrorAction SilentlyContinue | ForEach-Object { $_.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High; };
               }
               Write-Host "│ ✅ NetEase GameViewer đã cài đặt & khởi chạy!" -ForegroundColor Green;
           }
@@ -989,15 +1073,27 @@ jobs:
           $ngatRdpPath = "C:\NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat";
           Set-Content -Path $ngatRdpPath -Value ($ngatRdpLines -join "`r`n") -Encoding ASCII;
 
-          # 2. Script NGAT-VPS.bat
+          # 2. Script NGAT-VPS.bat có xác nhận (Chống bấm nhầm tự tắt máy)
           $ngatVpsLines = @(
               "@echo off",
+              "color 0C",
               "echo ============================================================",
-              "echo  DANG GUI LENH LUU DU LIEU VA NGAT VPS AN TOAN...",
+              "echo        CANH BAO: XAC NHAN TAT MAY VA LUU DU LIEU",
               "echo ============================================================",
+              "echo.",
+              "echo Ban co thuc su muon DUNG MAY VPS Zenova khong?",
+              "echo - Nhan phim Y (Yes) de xac nhan tat may.",
+              "echo - Nhan phim N hoac DONG cua so nay de HUY BO.",
+              "echo.",
+              "set /p confirm=Nhap lua chon cua ban (Y/N): ",
+              "if /i ""%confirm%"" neq ""Y"" (",
+              "    echo [HUY BO] May tiep tuc hoat dong binh thuong!",
+              "    timeout /t 3",
+              "    exit /b",
+              ")",
+              "echo Dang gui lenh luu toan bo du lieu va ngat VPS...",
               "curl.exe -X POST http://127.0.0.1:8080/api/cmd -H ""Content-Type: application/json"" -d ""{\""cmd\"":\""STOP_SESSION\""}""",
-              "echo Da gui lenh ngat VPS den he thong!",
-              "timeout /t 3",
+              "timeout /t 5",
               "shutdown /s /t 2"
           );
           $ngatVpsPath = "C:\NGAT-VPS.bat";
@@ -1028,7 +1124,7 @@ jobs:
                   $lnk1.IconLocation = "shell32.dll,48";
                   $lnk1.Save();
 
-                  $lnk2 = $ws.CreateShortcut("$d\NGAT-VPS.lnk");
+                  $lnk2 = $ws.CreateShortcut("$d\🛑_TAT-VPS_(Can-than-khi-bam).lnk");
                   $lnk2.TargetPath = $ngatVpsPath;
                   $lnk2.IconLocation = "shell32.dll,27";
                   $lnk2.Save();
@@ -1105,16 +1201,21 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       # 12. IN THÔNG TIN KẾT NỐI TOÀN DIỆN & STEP SUMMARY
       # ─────────────────────────────────────────────────────────────
+      # ─────────────────────────────────────────────────────────────
+      # 12. IN THÔNG TIN KẾT NỐI TOÀN DIỆN & STEP SUMMARY
+      # ─────────────────────────────────────────────────────────────
       - name: 🎉 Thông tin kết nối Zenova VPS
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
 
-          # Đọc URLs Cloudflare nếu đã sẵn sàng
+          # Lấy URLs Public cho Web Quản Lý (Cloudflare & Localtunnel)
           $cfWeb = "";
           $cfSunshine = "";
-          for ($i = 0; $i -lt 12; $i++) {
+          $ltWeb = "";
+
+          for ($i = 0; $i -lt 15; $i++) {
               if (Test-Path "C:\cloudflared-web.log") {
                   $log = Get-Content -Path "C:\cloudflared-web.log" -Raw -ErrorAction SilentlyContinue;
                   if ($log -match 'https://[a-zA-Z0-9-]+\.trycloudflare\.com') {
@@ -1129,48 +1230,59 @@ jobs:
                       Set-Content -Path "C:\cloudflared-sunshine-url.txt" -Value "$cfSunshine" -Force;
                   }
               }
-              if ($cfWeb -and $cfSunshine) { break; }
+              if (Test-Path "C:\localtunnel.log") {
+                  $logL = Get-Content -Path "C:\localtunnel.log" -Raw -ErrorAction SilentlyContinue;
+                  if ($logL -match 'https://[a-zA-Z0-9-]+\.loca\.lt') {
+                      $ltWeb = $Matches[0];
+                      Set-Content -Path "C:\localtunnel-web-url.txt" -Value "$ltWeb" -Force;
+                  }
+              }
+              if (($cfWeb -or $ltWeb) -and $cfSunshine) { break; }
               Start-Sleep -Seconds 1;
           }
 
-          if (-not $cfWeb) { $cfWeb = "http://127.0.0.1:8080"; }
-          if (-not $cfSunshine) { $cfSunshine = "https://127.0.0.1:47990"; }
+          $publicWeb = if ($cfWeb) { $cfWeb } elseif ($ltWeb) { $ltWeb } else { "http://127.0.0.1:8080" };
+          $publicSun = if ($cfSunshine) { $cfSunshine } else { "https://127.0.0.1:47990" };
 
           $sdId = if (Test-Path "C:\stardesk-id.txt") { (Get-Content "C:\stardesk-id.txt" -Raw).Trim() } else { "$env:STARDESK_ID" };
           $sdPin = if (Test-Path "C:\stardesk-pin.txt") { (Get-Content "C:\stardesk-pin.txt" -Raw).Trim() } else { "$env:STARDESK_PIN" };
+          $ngrokRdp = if (Test-Path "C:\rdp-ngrok.txt") { (Get-Content "C:\rdp-ngrok.txt" -Raw).Trim() } else { "" };
+          $pubIp = if (Test-Path "C:\machine-ip.txt") { (Get-Content "C:\machine-ip.txt" -Raw).Trim() } else { "Đang lấy..." };
           $tsIp = if ($env:TAILSCALE_IP) { $env:TAILSCALE_IP } else { "127.0.0.1" };
           $pass = "$env:FIXED_PASSWORD";
+
+          $rdpTarget = if ($ngrokRdp) { $ngrokRdp } elseif ($tsIp -and ($tsIp -ne "127.0.0.1")) { "$tsIp:3389" } else { "$pubIp:3389 (Cần mở Port/Ngrok)" };
 
           Write-Host ""
           Write-Host "======================================================================" -ForegroundColor Cyan
           Write-Host "                🎉 ZENOVA ULTIMATE VPS ĐÃ KHỞI CHẠY!                   " -ForegroundColor Yellow
           Write-Host "======================================================================" -ForegroundColor Cyan
-          Write-Host "🌐 WEB QUẢN LÝ (PUBLIC) : $cfWeb" -ForegroundColor Green
-          Write-Host "☀️ SUNSHINE STREAM (WEB) : $cfSunshine" -ForegroundColor Green
+          Write-Host "🌐 WEB QUẢN LÝ (PUBLIC) : $publicWeb" -ForegroundColor Green
+          Write-Host "☀️ SUNSHINE STREAM (WEB) : $publicSun" -ForegroundColor Green
           Write-Host "----------------------------------------------------------------------" -ForegroundColor Gray
-          Write-Host "🌟 1. STARDESK TRUNG (GAMEVIEWER) - 60 FPS KHÔNG ĐỘ TRỄ:" -ForegroundColor Yellow
+          Write-Host "🌟 1. STARDESK TRUNG (GAMEVIEWER) - 60-120 FPS KHÔNG ĐỘ TRỄ:" -ForegroundColor Yellow
           Write-Host "   - Device ID : $sdId" -ForegroundColor White
           Write-Host "   - Mã PIN    : $sdPin" -ForegroundColor White
           Write-Host "   - Cách dùng : Mở StarDesk/GameViewer -> Nhập ID & PIN -> Vào ngay!" -ForegroundColor Gray
           Write-Host "----------------------------------------------------------------------" -ForegroundColor Gray
-          Write-Host "☀️ 2. SUNSHINE STREAMING:" -ForegroundColor Yellow
-          Write-Host "   - Web UI    : $cfSunshine" -ForegroundColor White
+          Write-Host "🖥️ 2. WINDOWS REMOTE DESKTOP (RDP):" -ForegroundColor Yellow
+          Write-Host "   - Địa chỉ   : $rdpTarget" -ForegroundColor White
           Write-Host "   - User      : zenova (hoặc runneradmin)" -ForegroundColor White
           Write-Host "   - Password  : $pass" -ForegroundColor White
+          Write-Host "   - IP Public : $pubIp" -ForegroundColor Gray
           Write-Host "----------------------------------------------------------------------" -ForegroundColor Gray
-          Write-Host "🖥️ 3. WINDOWS REMOTE DESKTOP (RDP):" -ForegroundColor Yellow
-          Write-Host "   - Host      : $tsIp:3389" -ForegroundColor White
+          Write-Host "☀️ 3. SUNSHINE STREAMING:" -ForegroundColor Yellow
+          Write-Host "   - Web UI    : $publicSun" -ForegroundColor White
           Write-Host "   - User      : zenova (hoặc runneradmin)" -ForegroundColor White
           Write-Host "   - Password  : $pass" -ForegroundColor White
-          Write-Host "   - Giữ màn   : Chạy NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat trên Desktop" -ForegroundColor Gray
           Write-Host "======================================================================" -ForegroundColor Cyan
 
-          # Ghi vào GitHub Actions Step Summary bằng StringBuilder an toàn tuyệt đối
+          # Ghi vào GitHub Actions Step Summary
           $sb = New-Object System.Text.StringBuilder;
           [void]$sb.AppendLine('# 🚀 ZENOVA ULTIMATE VPS - THÔNG TIN KẾT NỐI');
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('### 🌐 1. Trang Quản Lý VPS (Port 8080)');
-          [void]$sb.AppendLine("- **Link Public Trực Tiếp**: [$cfWeb]($cfWeb)");
+          [void]$sb.AppendLine("- **Link Public Trực Tiếp**: [$publicWeb]($publicWeb)");
           [void]$sb.AppendLine("- **Tailscale**: http://" + $tsIp + ":8080");
           [void]$sb.AppendLine('- **Local**: http://127.0.0.1:8080');
           [void]$sb.AppendLine('- **Tính năng**: Lưu dữ liệu ngay (Save Now), Khởi động lại phiên (Restart), Ngắt VPS (Stop)!');
@@ -1186,22 +1298,22 @@ jobs:
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('---');
           [void]$sb.AppendLine('');
-          [void]$sb.AppendLine('### ☀️ 3. Kết Nối Sunshine & Moonlight Streaming');
+          [void]$sb.AppendLine('### 🖥️ 3. Kết Nối Windows Remote Desktop (RDP)');
           [void]$sb.AppendLine('| Thông Số | Giá Trị |');
           [void]$sb.AppendLine('|---|---|');
-          [void]$sb.AppendLine("| **Sunshine Web UI** | [$cfSunshine]($cfSunshine) |");
+          [void]$sb.AppendLine("| **Địa chỉ RDP** | **$rdpTarget** |");
           [void]$sb.AppendLine('| **Tài khoản** | zenova (hoặc runneradmin) |');
           [void]$sb.AppendLine("| **Mật khẩu** | $pass |");
+          [void]$sb.AppendLine("| **IP Outbound Máy** | $pubIp |");
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('---');
           [void]$sb.AppendLine('');
-          [void]$sb.AppendLine('### 🖥️ 4. Kết Nối Windows Remote Desktop (RDP)');
+          [void]$sb.AppendLine('### ☀️ 4. Kết Nối Sunshine & Moonlight Streaming');
           [void]$sb.AppendLine('| Thông Số | Giá Trị |');
           [void]$sb.AppendLine('|---|---|');
-          [void]$sb.AppendLine("| **Địa chỉ** | " + $tsIp + ":3389 |");
+          [void]$sb.AppendLine("| **Sunshine Web UI** | [$publicSun]($publicSun) |");
           [void]$sb.AppendLine('| **Tài khoản** | zenova (hoặc runneradmin) |');
           [void]$sb.AppendLine("| **Mật khẩu** | $pass |");
-          [void]$sb.AppendLine('| **Phím tắt ngắt RDP** | NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat trên Desktop |');
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('---');
           [void]$sb.AppendLine('');
@@ -1210,7 +1322,7 @@ jobs:
           [void]$sb.AppendLine('- **Hình Nền**: Zenova Cloud Aurora Lake áp dụng toàn bộ hệ thống.');
           Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($sb.ToString()) -Encoding UTF8;
 
-          [Console]::WriteLine("::notice title=THÔNG TIN KẾT NỐI ZENOVA VPS::StarDesk ID: $sdId | PIN: $sdPin | Web: $cfWeb | Sunshine: $cfSunshine");
+          [Console]::WriteLine("::notice title=THÔNG TIN KẾT NỐI ZENOVA VPS::StarDesk ID: $sdId | PIN: $sdPin | RDP: $rdpTarget | Web: $publicWeb");
           $global:LASTEXITCODE = 0;
           exit 0;
       - name: ⏳ Duy trì phiên làm việc & Lắng nghe lệnh Web Panel
@@ -1267,13 +1379,21 @@ jobs:
                   }
               }
 
-              # Kiểm tra cập nhật Cloudflare Tunnel URL nếu chưa có
+              # Kiểm tra cập nhật Public URL Web Quản Lý (Cloudflare hoặc Localtunnel)
               $cfWebFile = "C:\cloudflared-web-url.txt";
               if ((-not (Test-Path "$cfWebFile")) -and (Test-Path "C:\cloudflared-web.log")) {
                   $cfLog = Get-Content -Path "C:\cloudflared-web.log" -Raw -ErrorAction SilentlyContinue;
                   if ($cfLog -match 'https://[a-zA-Z0-9-]+\.trycloudflare\.com') {
                       Set-Content -Path "$cfWebFile" -Value ($Matches[0]) -Force;
-                      Write-Host "🎉 [KEEPALIVE] LINK WEB QUẢN LÝ PUBLIC: $($Matches[0])" -ForegroundColor Green;
+                      Write-Host "🎉 [KEEPALIVE] LINK WEB QUẢN LÝ (CLOUDFLARE): $($Matches[0])" -ForegroundColor Green;
+                      [Console]::WriteLine("::notice title=WEB QUẢN LÝ ONLINE::URL=$($Matches[0])");
+                  }
+              }
+              if ((-not (Test-Path "C:\localtunnel-web-url.txt")) -and (Test-Path "C:\localtunnel.log")) {
+                  $ltLog = Get-Content -Path "C:\localtunnel.log" -Raw -ErrorAction SilentlyContinue;
+                  if ($ltLog -match 'https://[a-zA-Z0-9-]+\.loca\.lt') {
+                      Set-Content -Path "C:\localtunnel-web-url.txt" -Value ($Matches[0]) -Force;
+                      Write-Host "🎉 [KEEPALIVE] LINK WEB QUẢN LÝ (LOCALTUNNEL): $($Matches[0])" -ForegroundColor Green;
                   }
               }
 
@@ -1305,7 +1425,7 @@ jobs:
               }
 
               if ((-not ($warned)) -and (($remain) -le 300)) {
-                  try { msg * /TIME:290 "Phien Zenova VPS sap het gio (5 phut). He thong se tu dong luu du lieu!"; } catch {}
+                  Write-Host "⏰ [CẢNH BÁO] Phiên Zenova VPS còn 5 phút nữa sẽ hết giờ. Hệ thống sẽ tự động lưu dữ liệu!" -ForegroundColor Yellow;
                   $warned = $true;
               }
 
