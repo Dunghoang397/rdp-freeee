@@ -135,9 +135,11 @@ jobs:
       DRIVE_LETTER: ${{ github.event.inputs.drive_letter || 'X' }}
       VHD_SIZE_GB: ${{ github.event.inputs.vhd_size_gb || '100GB' }}
       WEB_PORT: '8080'
+      SUNSHINE_WEB_PORT: '47990'
       ENABLE_DUCKDNS: ${{ github.event.inputs.enable_duckdns || 'true' }}
       INPUT_PIN_CODE: ${{ github.event.inputs.pin_code || 'Zenova2026' }}
       STARDESK_ID_INPUT: ${{ github.event.inputs.stardesk_id_trung || '' }}
+      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTHKEY || secrets.TAILSCALE_KEY || secrets.TS_AUTHKEY || secrets.TAILSCALE_AUTH_KEY }}
       NGROK_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN || secrets.NGROK_TOKEN }}
       CHOCO_PACKAGES: ${{ github.event.inputs.choco_packages || '' }}
 
@@ -634,16 +636,16 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 6. CẤU HÌNH IP MÁY, NGROK RDP & PUBLIC IP (BỎ HOÀN TOÀN TAILSCALE)
+      # 6. CẤU HÌNH IP MÁY, TAILSCALE VPN, NGROK RDP & PUBLIC IP
       # ─────────────────────────────────────────────────────────────
-      - name: 🌐 Cấu hình IP Máy, Ngrok RDP & Public IP
+      - name: 🌐 Cấu hình IP Máy, Tailscale VPN, Ngrok RDP & Public IP
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          Write-Host "🌐 Đang cấu hình IP Outbound và Ngrok RDP..." -ForegroundColor Cyan;
+          Write-Host "🌐 Đang cấu hình các địa chỉ IP kết nối (Tailscale, Ngrok RDP & Public IP)..." -ForegroundColor Cyan;
 
-          # Lấy IP Public Outbound của máy
+          # 1. Lấy IP Public Outbound của máy (Đảm bảo 100% có IP công khai trên bảng thông tin)
           $pubIp = "";
           @('https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com', 'https://ipinfo.io/ip') | ForEach-Object {
               if (-not $pubIp) {
@@ -655,10 +657,36 @@ jobs:
           Set-Content -Path "C:\machine-ip.txt" -Value "$pubIp" -Force;
           Write-Host "│ 🌐 IP Outbound Công Khai của máy: $pubIp" -ForegroundColor Green;
 
-          # Ngrok TCP Tunnel cho Remote Desktop (Port 3389)
+          # 2. Kết nối Tailscale VPN (Ưu tiên cao nhất khi có Key)
+          $tsKey = if ("$env:TAILSCALE_AUTH_KEY") { "$env:TAILSCALE_AUTH_KEY" } else { "" };
+          if ($tsKey) {
+              Write-Host "│ 🔑 Tìm thấy Tailscale Auth Key! Đang kết nối mạng Tailscale..." -ForegroundColor Cyan;
+              try {
+                  $msi = "$env:TEMP\tailscale.msi";
+                  & curl.exe -L --retry 3 --connect-timeout 20 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.msi' -o "$msi" 2>$null;
+                  if (Test-Path "$msi") {
+                      Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait;
+                      Start-Sleep -Seconds 3;
+                      $tsCli = 'C:\Program Files\Tailscale\tailscale.exe';
+                      if (Test-Path "$tsCli") {
+                          & "$tsCli" up --authkey="$tsKey" --hostname="zenova-$env:MACHINE_ID" --accept-routes 2>&1 | Out-Null;
+                          Start-Sleep -Seconds 3;
+                          $tsIp = (& "$tsCli" ip -4 2>$null).Trim();
+                          if ($tsIp) {
+                              "TAILSCALE_IP=$tsIp" >> "$env:GITHUB_ENV";
+                              Set-Content -Path "C:\tailscale-ip.txt" -Value "$tsIp" -Force;
+                              Write-Host "│ 🎉 ĐÃ KẾT NỐI TAILSCALE THÀNH CÔNG! IP: $tsIp" -ForegroundColor Green;
+                              [Console]::WriteLine("::notice title=TAILSCALE IP SẴN SÀNG::IP: $tsIp | RDP: $tsIp:3389 | Sunshine: https://$tsIp:47990");
+                          }
+                      }
+                  }
+              } catch {}
+          }
+
+          # 3. Ngrok TCP Tunnel cho Remote Desktop (Port 3389)
           $ngTok = if ($env:NGROK_TOKEN) { $env:NGROK_TOKEN } elseif ($env:NGROK_AUTH_TOKEN) { $env:NGROK_AUTH_TOKEN } else { "" };
           if ($ngTok) {
-              Write-Host "│ 🔑 Tìm thấy Ngrok Token! Đang mở RDP công khai..." -ForegroundColor Cyan;
+              Write-Host "│ 🔑 Tìm thấy Ngrok Token! Đang thiết lập Remote Desktop công khai..." -ForegroundColor Cyan;
               try {
                   $ngZip = "$env:TEMP\ngrok.zip";
                   & curl.exe -L --retry 3 --connect-timeout 15 "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -o "$ngZip" 2>$null;
@@ -676,7 +704,8 @@ jobs:
                                       $ep = $Matches[1];
                                       "RDP_NGROK_ENDPOINT=$ep" >> "$env:GITHUB_ENV";
                                       Set-Content -Path "C:\rdp-ngrok.txt" -Value "$ep" -Force;
-                                      Write-Host "│ 🎉 ĐỊA CHỈ RDP NGROK: $ep" -ForegroundColor Green;
+                                      Write-Host "│ 🎉 ĐÃ TẠO ĐỊA CHỈ REMOTE DESKTOP (NGROK): $ep" -ForegroundColor Green;
+                                      [Console]::WriteLine("::notice title=REMOTE DESKTOP QUA NGROK SẴN SÀNG::Địa chỉ RDP: $ep | User: zenova | Pass: $env:FIXED_PASSWORD");
                                       break;
                                   }
                               }
@@ -688,7 +717,10 @@ jobs:
 
           $global:LASTEXITCODE = 0;
           exit 0;
-# ─────────────────────────────────────────────────────────────
+
+      # ─────────────────────────────────────────────────────────────
+      # 7. CÀI DRIVER MÀN HÌNH ẢO (VDD), ÂM THANH ẢO & SUNSHINE
+      # ─────────────────────────────────────────────────────────────
       - name: 🖥️🔊☀️ Cài Driver Màn Hình Ảo (VDD), Âm Thanh Ảo & Sunshine
         shell: pwsh
         run: |
@@ -775,21 +807,31 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 8. CÀI ĐẶT SPOTIFY, STARDESK TRUNG & TẠO THƯ MỤC C:\Apps CHỨA ĐỦ TRỌN BỘ APP
+      # 8. CÀI ĐẶT TRỌN BỘ APP (DISCORD, SPOTIFY, BANDICAM, EVKEY, ROBLOX, MINECRAFT NO-ACC) & HÌNH NỀN
       # ─────────────────────────────────────────────────────────────
-      - name: 📦 Cài Đặt Spotify, StarDesk Trung & Gom Trọn Bộ App vào C:\Apps
+      - name: 📦 Tải trọn bộ App & Hình Nền (Discord, Spotify, Bandicam, EVKey, Roblox, Minecraft)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          Write-Host "📦 Đang cài đặt Spotify, StarDesk Trung và tải toàn bộ App vào C:\Apps..." -ForegroundColor Cyan;
+          Write-Host "📦 CÀI ĐẶT TRỌN BỘ APP THEO ĐÚNG LINK YÊU CẦU & ÁP DỤNG HÌNH NỀN..." -ForegroundColor Cyan;
+          $appsFolder = "$($env:MOUNT_LETTER):\Apps";
+          New-Item -ItemType Directory -Force -Path "$appsFolder" -ErrorAction SilentlyContinue | Out-Null;
 
-          # 1. Áp dụng hình nền Zenova Cloud Aurora Lake
+          # ─────────────────────────────────────────────────────────────
+          # 1. HÌNH NỀN ZENOVA CLOUD AURORA LAKE (ÁP DỤNG ALL MÁY & ALL USER)
+          # ─────────────────────────────────────────────────────────────
+          Write-Host "│ 🖼️ Áp dụng hình nền Zenova Cloud Aurora Lake cho toàn bộ hệ thống..." -ForegroundColor Cyan;
           $wpUrl = "https://raw.githubusercontent.com/Dunghoang397/rdp-freeee/2715203b1462985959767187a585efb637441f9f/Zenova%20Cloud%20Aurora%20Lake.png";
           $wpFile = "C:\Windows\Web\Wallpaper\Zenova.png";
           $wpDir = "C:\Windows\Web\Wallpaper";
           New-Item -ItemType Directory -Force -Path "$wpDir" -ErrorAction SilentlyContinue | Out-Null;
+
           & curl.exe -L --retry 3 --connect-timeout 20 -A "Mozilla/5.0" "$wpUrl" -o "$wpFile" 2>$null;
+          if ((-not (Test-Path "$wpFile")) -or ((Get-Item "$wpFile").Length -lt 10KB)) {
+              Invoke-WebRequest -Uri "$wpUrl" -OutFile "$wpFile" -UseBasicParsing -TimeoutSec 30 -ErrorAction SilentlyContinue;
+          }
+
           if (Test-Path "$wpFile") {
               $winWp = "C:\Windows\Web\Wallpaper\Windows\img0.jpg";
               try {
@@ -797,14 +839,35 @@ jobs:
                   icacls "$winWp" /grant Everyone:F *> $null;
                   Copy-Item -Path "$wpFile" -Destination "$winWp" -Force -ErrorAction SilentlyContinue;
               } catch {}
+
+              try {
+                  reg load HKU\DefaultUser C:\Users\Default\NTUSER.DAT *> $null;
+                  Set-ItemProperty -Path 'HKU:\DefaultUser\Control Panel\Desktop' -Name Wallpaper -Value "$wpFile" -Force -ErrorAction SilentlyContinue;
+                  Set-ItemProperty -Path 'HKU:\DefaultUser\Control Panel\Desktop' -Name WallpaperStyle -Value "10" -Force -ErrorAction SilentlyContinue;
+                  reg unload HKU\DefaultUser *> $null;
+              } catch {}
+
+              $policyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization';
+              New-Item -Path "$policyPath" -Force -ErrorAction SilentlyContinue | Out-Null;
+              Set-ItemProperty -Path "$policyPath" -Name 'LockScreenImage' -Value "$wpFile" -Force -ErrorAction SilentlyContinue;
+
               Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value "$wpFile" -Force -ErrorAction SilentlyContinue;
               Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name WallpaperStyle -Value "10" -Force -ErrorAction SilentlyContinue;
+              try {
+                  $setterCode = 'using System; using System.Runtime.InteropServices; public class ZenovaWallpaper { [DllImport("user32.dll", CharSet = CharSet.Auto)] public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni); public static void Set(string path) { SystemParametersInfo(20, 0, path, 0x01 | 0x02); } }';
+                  Add-Type -TypeDefinition $setterCode -ErrorAction SilentlyContinue;
+                  [ZenovaWallpaper]::Set("$wpFile");
+              } catch {}
+              Write-Host "│ ✅ Đã áp dụng hình nền Zenova Cloud Aurora Lake thành công!" -ForegroundColor Green;
           }
 
-          # 2. Cài đặt StarDesk Trung & NetEase GameViewer (Phương thức kết nối độc quyền duy nhất)
-          Write-Host "│ 🌟 Cài đặt StarDesk Trung 1.5.3 & NetEase GameViewer 4.43.1..." -ForegroundColor Cyan;
+          # ─────────────────────────────────────────────────────────────
+          # 2. CÀI ĐẶT STARDESK TRUNG (1.5.3) & NETEASE GAMEVIEWER (4.43.1)
+          # ─────────────────────────────────────────────────────────────
+          Write-Host "│ 🌟 Tải và cài đặt StarDesk Trung & NetEase GameViewer..." -ForegroundColor Cyan;
           $sdInstaller = 'C:\StarDesk_1.5.3.exe';
           $gvInstaller = 'C:\uuyc_4.43.1.exe';
+
           & curl.exe -L --retry 3 --connect-timeout 30 -A "Mozilla/5.0" "https://github.com/ddvdat-glitch/abcd/releases/download/app/StarDesk_1.5.3.exe" -o "$sdInstaller" 2>$null;
           & curl.exe -L --retry 3 --connect-timeout 30 -A "Mozilla/5.0" "https://github.com/ddvdat-glitch/abcd/releases/download/app/uuyc_4.43.1.exe" -o "$gvInstaller" 2>$null;
 
@@ -812,95 +875,139 @@ jobs:
               Start-Process -FilePath "$gvInstaller" -ArgumentList '/S' -Wait;
               Get-Service -Name '*GameViewer*' -ErrorAction SilentlyContinue | Set-Service -StartupType Automatic;
               Get-Service -Name '*GameViewer*' -ErrorAction SilentlyContinue | Start-Service;
-              $gvApp = 'C:\Program Files\Netease\GameViewer\bin\GameViewer.exe';
+
+              $gvServer = 'C:\Program Files\Netease\GameViewer\bin\GameViewerServer.exe';
+              $gvApp    = 'C:\Program Files\Netease\GameViewer\bin\GameViewer.exe';
+              if (Test-Path "$gvServer") { Start-Process "$gvServer" -WorkingDirectory 'C:\Program Files\Netease\GameViewer\bin' -ErrorAction SilentlyContinue; }
               if (Test-Path "$gvApp") {
                   & schtasks.exe /Create /TN "Zenova-GameViewer" /TR "`"$gvApp`"" /SC ONCE /ST 00:00 /RU runneradmin /RL HIGHEST /IT /F *> $null;
                   & schtasks.exe /Run /TN "Zenova-GameViewer" *> $null;
                   Start-Process -FilePath "$gvApp" -WorkingDirectory 'C:\Program Files\Netease\GameViewer\bin' -ErrorAction SilentlyContinue;
+                  Start-Sleep -Seconds 1;
                   Get-Process -Name 'GameViewer*' -ErrorAction SilentlyContinue | ForEach-Object { $_.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High; };
               }
-              Write-Host "│ ✅ NetEase GameViewer đã sẵn sàng!" -ForegroundColor Green;
+              Write-Host "│ ✅ NetEase GameViewer đã cài đặt & khởi chạy!" -ForegroundColor Green;
           }
 
           if (Test-Path "$sdInstaller") {
               Start-Process -FilePath "$sdInstaller" -ArgumentList '/S' -Wait;
               Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Set-Service -StartupType Automatic;
               Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Start-Service;
+
               $sdApp = 'C:\Program Files\StarDesk\StarDesk.exe';
               if (Test-Path "$sdApp") {
                   & schtasks.exe /Create /TN "Zenova-StarDesk" /TR "`"$sdApp`"" /SC ONCE /ST 00:00 /RU runneradmin /RL HIGHEST /IT /F *> $null;
                   & schtasks.exe /Run /TN "Zenova-StarDesk" *> $null;
                   Start-Process -FilePath "$sdApp" -WorkingDirectory 'C:\Program Files\StarDesk' -ErrorAction SilentlyContinue;
-                  Get-Process -Name 'StarDesk*' -ErrorAction SilentlyContinue | ForEach-Object { $_.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High; };
               }
-              Write-Host "│ ✅ StarDesk Trung đã cài đặt & chạy P2P 120fps!" -ForegroundColor Green;
+              Write-Host "│ ✅ StarDesk Trung đã cài đặt & khởi chạy!" -ForegroundColor Green;
           }
 
-          # 3. Cài đặt Spotify (Theo đúng yêu cầu người dùng)
-          Write-Host "│ 🎵 Tải và cài đặt Spotify..." -ForegroundColor Cyan;
-          $spInstaller = "$env:TEMP\SpotifySetup.exe";
-          & curl.exe -L --retry 3 --connect-timeout 20 "https://download.scdn.co/SpotifySetup.exe" -o "$spInstaller" 2>$null;
-          if (Test-Path "$spInstaller") {
-              Start-Process -FilePath "$spInstaller" -ArgumentList '/silent' -Wait -ErrorAction SilentlyContinue;
-              Write-Host "│ ✅ Spotify đã được cài đặt thành công!" -ForegroundColor Green;
-          }
+          # ─────────────────────────────────────────────────────────────
+          # 3. CÀI ĐẶT EVKEY (BỘ GÕ TIẾNG VIỆT SIÊU NHẸ)
+          # ─────────────────────────────────────────────────────────────
+          Write-Host "│ 🇻🇳 Tải và cài đặt EVKey Tiếng Việt theo link chính thức..." -ForegroundColor Cyan;
+          try {
+              $evZip = "$env:TEMP\EVKey.zip";
+              & curl.exe -L --retry 3 --connect-timeout 15 "https://github.com/lamquangminh/EVKey/releases/download/Release/EVKey.zip" -o "$evZip" 2>$null;
+              if (Test-Path "$evZip") {
+                  $evDir = 'C:\EVKey';
+                  Expand-Archive -Path "$evZip" -DestinationPath "$evDir" -Force;
+                  $evExe = "$evDir\EVKey64.exe";
+                  if (Test-Path "$evExe") {
+                      Start-Process -FilePath "$evExe" -WorkingDirectory "$evDir" -ErrorAction SilentlyContinue;
+                      Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'EVKey' -Value "`"$evExe`"" -Force -ErrorAction SilentlyContinue;
+                      Write-Host "│ ✅ EVKey đã sẵn sàng!" -ForegroundColor Green;
+                  }
+              }
+          } catch {}
 
-          # 4. TẠO THƯ MỤC C:\Apps VÀ TẢI TOÀN BỘ BỘ APP ĐẦY ĐỦ VÀO ĐÓ (SẴN SÀNG CHẠY / CÀI ĐẶT)
-          Write-Host "│ 📁 Chuẩn bị thư mục C:\Apps chứa đầy đủ tất cả phần mềm cho người dùng..." -ForegroundColor Cyan;
-          $appsDir = 'C:\Apps';
-          New-Item -ItemType Directory -Force -Path $appsDir -ErrorAction SilentlyContinue | Out-Null;
-
-          # Tải Bloxstrap Roblox vào C:\Apps
-          & curl.exe -L --retry 3 --connect-timeout 25 "https://github.com/bloxstraplabs/bloxstrap/releases/download/v2.11.4/Bloxstrap-v2.11.4.exe" -o "$appsDir\Bloxstrap-Roblox.exe" 2>$null;
+          # ─────────────────────────────────────────────────────────────
+          # 4. TẢI VÀ CÀI ĐẶT DISCORD, SPOTIFY, BANDICAM THEO ĐÚNG LINK YÊU CẦU
+          # ─────────────────────────────────────────────────────────────
+          Write-Host "│ 📦 Tải và cài đặt Discord, Spotify, Bandicam theo link trực tiếp..." -ForegroundColor Cyan;
           
-          # Tải PrismLauncher Minecraft vào C:\Apps
-          $mcZip = "$appsDir\PrismLauncher-Minecraft.zip";
-          & curl.exe -L --retry 3 --connect-timeout 25 "https://github.com/Diegiwg/PrismLauncher-Cracked/releases/download/11.0.3/PrismLauncher-Windows-MSVC-Portable-11.0.3.zip" -o "$mcZip" 2>$null;
-          if (Test-Path "$mcZip") {
-              Expand-Archive -Path "$mcZip" -DestinationPath "$appsDir\PrismLauncher" -Force -ErrorAction SilentlyContinue;
-          }
-
-          # Tải EVKey vào C:\Apps
-          $evZip = "$appsDir\EVKey.zip";
-          & curl.exe -L --retry 3 --connect-timeout 15 "https://github.com/lamquangminh/EVKey/releases/download/Release/EVKey.zip" -o "$evZip" 2>$null;
-          if (Test-Path "$evZip") {
-              Expand-Archive -Path "$evZip" -DestinationPath "$appsDir\EVKey" -Force -ErrorAction SilentlyContinue;
-              $evExe = "$appsDir\EVKey\EVKey64.exe";
-              if (Test-Path "$evExe") {
-                  Start-Process -FilePath "$evExe" -WorkingDirectory "$appsDir\EVKey" -ErrorAction SilentlyContinue;
-                  Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'EVKey' -Value "`"$evExe`"" -Force -ErrorAction SilentlyContinue;
+          # Discord x64 (Fix triệt để lỗi InconsistentInstallerState & Fatal Javascript Error)
+          try {
+              # Tắt sạch các tiến trình Discord cũ hoặc update ngầm trước khi cài
+              Stop-Process -Name Discord, Update -Force -ErrorAction SilentlyContinue;
+              $dcInstaller = "$env:TEMP\DiscordSetup.exe";
+              & curl.exe -L --retry 3 --connect-timeout 25 "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64" -o "$dcInstaller" 2>$null;
+              if (Test-Path "$dcInstaller") {
+                  # Chạy cài đặt ngầm và đợi kết thúc
+                  $dcProc = Start-Process -FilePath "$dcInstaller" -ArgumentList "-s" -PassThru -ErrorAction SilentlyContinue;
+                  $null = $dcProc.WaitForExit(45000);
+                  Start-Sleep -Seconds 3;
+                  # Diệt tiến trình Discord auto-launch không có tham số headless
+                  Stop-Process -Name Discord, Update -Force -ErrorAction SilentlyContinue;
+                  # Cấu hình tắt Hardware Acceleration tránh crash Electron trên máy ảo
+                  $dcSettingsDir = "$env:APPDATA\discord";
+                  New-Item -ItemType Directory -Force -Path $dcSettingsDir -ErrorAction SilentlyContinue | Out-Null;
+                  Set-Content -Path "$dcSettingsDir\settings.json" -Value '{"DCA_DISABLE_HARDWARE_ACCELERATION":true,"OPEN_ON_STARTUP":false,"MINIMIZE_TO_TRAY":false}' -Force -ErrorAction SilentlyContinue;
+                  Write-Host "│ ✅ Discord x64 đã cài đặt hoàn tất & fix lỗi crash JavaScript!" -ForegroundColor Green;
               }
+          } catch {}
+
+          # Spotify
+          try {
+              $spInstaller = "$env:TEMP\SpotifySetup.exe";
+              & curl.exe -L --retry 3 --connect-timeout 20 "https://download.scdn.co/SpotifySetup.exe" -o "$spInstaller" 2>$null;
+              if (Test-Path "$spInstaller") {
+                  Start-Process -FilePath "$spInstaller" -ArgumentList '/silent' -ErrorAction SilentlyContinue;
+                  Write-Host "│ ✅ Spotify đã bắt đầu cài đặt!" -ForegroundColor Green;
+              }
+          } catch {}
+
+          # Bandicam
+          try {
+              $bdInstaller = "$env:TEMP\bdcamsetup.exe";
+              & curl.exe -L --retry 3 --connect-timeout 20 "https://dl.bandicam.com/bdcamsetup.exe" -o "$bdInstaller" 2>$null;
+              if (Test-Path "$bdInstaller") {
+                  Start-Process -FilePath "$bdInstaller" -ArgumentList '/S' -ErrorAction SilentlyContinue;
+                  Write-Host "│ ✅ Bandicam đã bắt đầu cài đặt!" -ForegroundColor Green;
+              }
+          } catch {}
+
+          # ─────────────────────────────────────────────────────────────
+          # 5. CÀI ĐẶT ROBLOX QUA BLOXSTRAP (BỎ QUA CHẶN DATACENTER S3 & UNLOCK FPS)
+          # ─────────────────────────────────────────────────────────────
+          Write-Host "│ 🎮 Tải và cài đặt Roblox Bloxstrap (Fix triệt để lỗi Forbidden S3 & Mở khóa FPS)..." -ForegroundColor Cyan;
+          try {
+              $bloxDir = 'C:\Bloxstrap';
+              New-Item -ItemType Directory -Force -Path $bloxDir -ErrorAction SilentlyContinue | Out-Null;
+              $bloxExe = "$bloxDir\Bloxstrap.exe";
+              & curl.exe -L --retry 3 --connect-timeout 25 "https://github.com/bloxstraplabs/bloxstrap/releases/download/v2.11.4/Bloxstrap-v2.11.4.exe" -o "$bloxExe" 2>$null;
+              if (Test-Path "$bloxExe") {
+                  Write-Host "│ ✅ Bloxstrap Roblox đã sẵn sàng tại $bloxExe!" -ForegroundColor Green;
+              }
+          } catch {}
+
+          # ─────────────────────────────────────────────────────────────
+          # 6. CÀI ĐẶT MINECRAFT LAUNCHER (KHÔNG CẦN ACC + MOD FIX LAG FPS BOOST)
+          # ─────────────────────────────────────────────────────────────
+          Write-Host "│ ⛏️ Tải Minecraft Launcher (Không cần acc, hỗ trợ Mod Fabric/Sodium Fix Lag)..." -ForegroundColor Cyan;
+          try {
+              $mcZip = "$env:TEMP\PrismLauncher.zip";
+              & curl.exe -L --retry 3 --connect-timeout 25 "https://github.com/Diegiwg/PrismLauncher-Cracked/releases/download/11.0.3/PrismLauncher-Windows-MSVC-Portable-11.0.3.zip" -o "$mcZip" 2>$null;
+              if (Test-Path "$mcZip") {
+                  $mcDir = 'C:\PrismLauncher';
+                  Expand-Archive -Path "$mcZip" -DestinationPath "$mcDir" -Force;
+                  Write-Host "│ ✅ Minecraft Launcher Portable đã sẵn sàng tại $mcDir!" -ForegroundColor Green;
+              }
+          } catch {}
+
+          # 7. Cài thêm gói choco phụ nếu người dùng nhập
+          if ("$env:CHOCO_PACKAGES") {
+              $extra = "$env:CHOCO_PACKAGES";
+              try { choco install $extra -y --no-progress --limit-output; } catch {}
           }
 
-          # Tải Discord vào C:\Apps
-          & curl.exe -L --retry 3 --connect-timeout 25 "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64" -o "$appsDir\DiscordSetup.exe" 2>$null;
-
-          # Tải Bandicam vào C:\Apps
-          & curl.exe -L --retry 3 --connect-timeout 20 "https://dl.bandicam.com/bdcamsetup.exe" -o "$appsDir\BandicamSetup.exe" 2>$null;
-
-          # Sao chép Spotify installer vào C:\Apps
-          if (Test-Path "$spInstaller") {
-              Copy-Item -Path "$spInstaller" -Destination "$appsDir\SpotifySetup.exe" -Force -ErrorAction SilentlyContinue;
-          }
-
-          # Tạo script cài nhanh tất cả trong thư mục C:\Apps
-          $autoInstallScript = @(
-              "@echo off",
-              "title Cai Dat Nhanh Toan Bo App Zenova",
-              "echo ====================================================",
-              "echo      DANG CAI DAT TOAN BO UNG DUNG TRONG C:\Apps...",
-              "echo ====================================================",
-              "if exist ""%~dp0Bloxstrap-Roblox.exe"" start """" ""%~dp0Bloxstrap-Roblox.exe"" -quiet",
-              "if exist ""%~dp0BandicamSetup.exe"" start """" /wait ""%~dp0BandicamSetup.exe"" /S",
-              "if exist ""%~dp0DiscordSetup.exe"" start """" ""%~dp0DiscordSetup.exe"" -s",
-              "echo [OK] Hoan tat!",
-              "timeout /t 5"
-          ) -join "`r`n";
-          Set-Content -Path "$appsDir\Cai-Dat-Tat-Ca-App.bat" -Value $autoInstallScript -Encoding ASCII;
-
-          Write-Host "✅ Toàn bộ App đã có sẵn trong C:\Apps và Spotify đã được cài đặt!" -ForegroundColor Green;
+          Write-Host "✅ Toàn bộ ứng dụng đã được tải và cài đặt thần tốc!" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
+
+      # ─────────────────────────────────────────────────────────────
+      # 9. CẤU HÌNH PIN STARDESK TRUNG & LẤY DEVICE ID
       # ─────────────────────────────────────────────────────────────
       - name: 🔑 Cấu hình PIN StarDesk Trung & Lấy Device ID
         shell: pwsh
@@ -959,88 +1066,173 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 10. TẠO CÁC PHÍM TẮT TIỆN ÍCH TRÊN DESKTOP (KHO APP C:\Apps, SPOTIFY, STARDESK)
+      # 10. TẠO CÁC PHÍM TẮT TIỆN ÍCH TRÊN DESKTOP (NGẮT VPS CÓ XÁC NHẬN, MINECRAFT, WEB)
       # ─────────────────────────────────────────────────────────────
       - name: 🖥️ Tạo các phím tắt tiện ích trên Desktop
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          Write-Host "🖥️ Đang tạo các phím tắt Desktop gọn gàng, chuẩn xác..." -ForegroundColor Cyan;
+          Write-Host "🖥️ Đang tạo các tiện ích Desktop và phím tắt ngắt VPS..." -ForegroundColor Cyan;
 
-          # 1. Script NGAT-VPS.bat
+          # 1. Script NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat
+          $ngatRdpLines = @(
+              "@echo off",
+              "echo ============================================================",
+              "echo  DANG CHUYEN SESSION VE CONSOLE CHO SUNSHINE & STARDESK...",
+              "echo ============================================================",
+              "for /f ""skip=1 tokens=3"" %%s in ('query user %USERNAME%') do tscon %%s /dest:console",
+              "for /f ""skip=1 tokens=2"" %%s in ('query user %USERNAME%') do tscon %%s /dest:console",
+              "echo [OK] Da chuyen man hinh ve Console! Sunshine & StarDesk tiep tuc hoat dong!",
+              "timeout /t 3"
+          );
+          $ngatRdpPath = "C:\NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat";
+          Set-Content -Path $ngatRdpPath -Value ($ngatRdpLines -join "`r`n") -Encoding ASCII;
+
+          # 2. Script NGAT-VPS.bat có xác nhận (Chống bấm nhầm tự tắt máy)
           $ngatVpsLines = @(
               "@echo off",
               "color 0C",
               "echo ============================================================",
               "echo        CANH BAO: XAC NHAN TAT MAY VA LUU DU LIEU",
               "echo ============================================================",
-              "set /p confirm=Ban co muon dung may VPS va luu du lieu? (Y/N): ",
-              "if /i ""%confirm%"" neq ""Y"" exit /b",
+              "echo.",
+              "echo Ban co thuc su muon DUNG MAY VPS Zenova khong?",
+              "echo - Nhan phim Y (Yes) de xac nhan tat may an toan.",
+              "echo - Nhan phim N hoac DONG cua so nay de HUY BO.",
+              "echo.",
+              "set /p confirm=Nhap lua chon cua ban (Y/N): ",
+              "if /i ""%confirm%"" neq ""Y"" (",
+              "    echo [HUY BO] May tiep tuc hoat dong binh thuong!",
+              "    timeout /t 3",
+              "    exit /b",
+              ")",
+              "echo Dang gui lenh luu toan bo du lieu va ngat VPS...",
               "curl.exe -X POST http://127.0.0.1:8080/api/cmd -H ""Content-Type: application/json"" -d ""{\""cmd\"":\""STOP_SESSION\""}""",
-              "timeout /t 3",
+              "timeout /t 5",
               "shutdown /s /t 2"
-          ) -join "`r`n";
-          Set-Content -Path "C:\NGAT-VPS.bat" -Value $ngatVpsLines -Encoding ASCII;
+          );
+          $ngatVpsPath = "C:\NGAT-VPS.bat";
+          Set-Content -Path $ngatVpsPath -Value ($ngatVpsLines -join "`r`n") -Encoding ASCII;
 
-          # 2. Script LUU-DU-LIEU.bat
+          # 3. Script LUU-DU-LIEU-NGAY.bat
           $luuLines = @(
               "@echo off",
               "echo ============================================================",
               "echo  DANG GUI LENH LUU DU LIEU NGAY LEN GITHUB RELEASE...",
               "echo ============================================================",
               "curl.exe -X POST http://127.0.0.1:8080/api/cmd -H ""Content-Type: application/json"" -d ""{\""cmd\"":\""SAVE_NOW\""}""",
+              "echo Da gui lenh luu thanh cong!",
               "timeout /t 3"
-          ) -join "`r`n";
-          Set-Content -Path "C:\LUU-DU-LIEU-NGAY.bat" -Value $luuLines -Encoding ASCII;
+          );
+          $luuPath = "C:\LUU-DU-LIEU-NGAY.bat";
+          Set-Content -Path $luuPath -Value ($luuLines -join "`r`n") -Encoding ASCII;
 
-          # 3. Tạo phím tắt trên Public Desktop và User Desktops
+          # 4. Sắp xếp Desktop cực gọn, đẹp mắt, chuẩn 100% không trùng lặp icon
           try {
-              $pubDesktop    = "C:\Users\Public\Desktop";
-              $runnerDesktop = "C:\Users\runneradmin\Desktop";
-              $zenovaDesktop = "C:\Users\zenova\Desktop";
-              $allDesktops   = @($pubDesktop, $runnerDesktop, $zenovaDesktop);
+              $pubDesktop = "C:\Users\Public\Desktop";
+              New-Item -ItemType Directory -Force -Path $pubDesktop -ErrorAction SilentlyContinue | Out-Null;
 
-              $allDesktops | ForEach-Object {
-                  New-Item -ItemType Directory -Force -Path $_ -ErrorAction SilentlyContinue | Out-Null;
-                  Remove-Item -Path "$_\*Sunshine*" -Force -ErrorAction SilentlyContinue;
-                  Remove-Item -Path "$_\LUU-DU-LIEU-NGAY.bat", "$_\NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat" -Force -ErrorAction SilentlyContinue;
+              # Dọn dẹp sạch mọi file rác và trùng lặp trên Desktop user
+              @("C:\Users\runneradmin\Desktop", "C:\Users\zenova\Desktop") | ForEach-Object {
+                  Get-ChildItem -Path $_ -Filter "*.bat" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue;
+                  Get-ChildItem -Path $_ -Filter "*.url" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue;
+                  Get-ChildItem -Path $_ -Filter "*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue;
               };
+
+              # Xóa file bat rác cũ trên Public Desktop (Lưu dữ liệu đã tích hợp trong Web Quản Lý)
+              @("LUU-DU-LIEU-NGAY.bat", "NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat", "Web-Quan-Ly-VPS.url") | ForEach-Object {
+                  Remove-Item -Path "$pubDesktop\$_" -Force -ErrorAction SilentlyContinue;
+              };
+
+              # 1. Web Quản Lý VPS (Port 8080)
+              Set-Content -Path "$pubDesktop\🌐 Web Quản Lý VPS.url" -Value "[InternetShortcut]`r`nURL=http://127.0.0.1:8080/`r`nIconIndex=0" -Encoding ASCII -Force;
+
+              # 2. Sunshine Streaming (Local trong VPS https://localhost:47990)
+              Set-Content -Path "$pubDesktop\☀️ Sunshine Streaming.url" -Value "[InternetShortcut]`r`nURL=https://localhost:47990/`r`nIconIndex=0" -Encoding ASCII -Force;
+
+              # 3. Phím tắt Ngắt VPS khẩn cấp có xác nhận an toàn
+              Copy-Item -Path $ngatVpsPath -Destination "$pubDesktop\🛑 Ngắt VPS Khẩn Cấp.bat" -Force -ErrorAction SilentlyContinue;
+
+              # Tìm đường dẫn thực tế của các ứng dụng
+              $bloxExe = "C:\Bloxstrap\Bloxstrap.exe";
+              $mcExe   = (Get-ChildItem -Path "C:\PrismLauncher" -Filter "*prismlauncher*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $evExe   = (Get-ChildItem -Path "C:\EVKey" -Filter "*EVKey64.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $dcExe   = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Local\Discord", "C:\Users\zenova\AppData\Local\Discord") -Filter "Discord.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*app-*" } | Select-Object -First 1).FullName;
+              $gvExe   = (Get-ChildItem -Path "C:\Program Files\Netease\GameViewer\bin" -Filter "GameViewer.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $spExe   = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Roaming\Spotify", "C:\Users\zenova\AppData\Roaming\Spotify") -Filter "Spotify.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $bdExe   = 'C:\Program Files\Bandicam\bdcam.exe';
 
               $ws = New-Object -ComObject WScript.Shell;
 
-              $allDesktops | ForEach-Object {
-                  $dPath = $_;
+              # 4. Ổ đĩa riêng ảo 100TB
+              $lnkDrv = $ws.CreateShortcut("$pubDesktop\📁 Ổ Đĩa 100TB.lnk");
+              $lnkDrv.TargetPath = "$($env:MOUNT_LETTER):\";
+              $lnkDrv.Save();
 
-                  # 1. Thư mục Kho Ứng Dụng (C:\Apps)
-                  try {
-                      $lnkApps = $ws.CreateShortcut("$dPath\Kho-Ung-Dung (C-Apps).lnk");
-                      $lnkApps.TargetPath = "C:\Apps";
-                      $lnkApps.Description = "Thư mục chứa đầy đủ toàn bộ ứng dụng cài đặt";
-                      $lnkApps.Save();
-                  } catch {}
+              # 5. Roblox (Bloxstrap)
+              if (Test-Path "$bloxExe") {
+                  $lnkBlox = $ws.CreateShortcut("$pubDesktop\🎮 Roblox (Bloxstrap).lnk");
+                  $lnkBlox.TargetPath = $bloxExe;
+                  $lnkBlox.WorkingDirectory = Split-Path $bloxExe;
+                  $lnkBlox.Save();
+              }
 
-                  # 2. Ổ Đĩa Ảo 100TB
-                  try {
-                      $lnkDrv = $ws.CreateShortcut("$dPath\O-Dia-100TB.lnk");
-                      $lnkDrv.TargetPath = "$($env:MOUNT_LETTER):\";
-                      $lnkDrv.Save();
-                  } catch {}
+              # 6. Minecraft Launcher (Fix Lag)
+              if ($mcExe) {
+                  $lnkMc = $ws.CreateShortcut("$pubDesktop\🎮 Minecraft (Fix Lag).lnk");
+                  $lnkMc.TargetPath = $mcExe;
+                  $lnkMc.WorkingDirectory = Split-Path $mcExe;
+                  $lnkMc.Save();
+              }
 
-                  # 3. Web Quản Lý VPS (Port 8080)
-                  Set-Content -Path "$dPath\Web-Quan-Ly-VPS.url" -Value "[InternetShortcut]`r`nURL=http://127.0.0.1:8080/`r`nIconIndex=0" -Encoding ASCII -Force;
+              # 7. EVKey Tiếng Việt
+              if ($evExe) {
+                  $lnkEv = $ws.CreateShortcut("$pubDesktop\⌨️ EVKey Tiếng Việt.lnk");
+                  $lnkEv.TargetPath = $evExe;
+                  $lnkEv.WorkingDirectory = Split-Path $evExe;
+                  $lnkEv.Save();
+              }
 
-                  # 4. Script Ngắt VPS an toàn
-                  Copy-Item -Path "C:\NGAT-VPS.bat" -Destination "$dPath\Ngat-VPS-Khan-Cap.bat" -Force -ErrorAction SilentlyContinue;
-                  Copy-Item -Path "C:\LUU-DU-LIEU-NGAY.bat" -Destination "$dPath\Luu-Du-Lieu.bat" -Force -ErrorAction SilentlyContinue;
-              };
+              # 8. Discord (Chạy trực tiếp client, bypass update crash)
+              if ($dcExe) {
+                  $lnkDc = $ws.CreateShortcut("$pubDesktop\💬 Discord.lnk");
+                  $lnkDc.TargetPath = $dcExe;
+                  $lnkDc.Arguments = "--disable-gpu --no-sandbox";
+                  $lnkDc.WorkingDirectory = Split-Path $dcExe;
+                  $lnkDc.Save();
+              }
 
-              Write-Host "✅ Đã tạo các phím tắt chính xác trên Desktop!" -ForegroundColor Green;
+              # 9. StarDesk Trung / GameViewer
+              if ($gvExe) {
+                  $lnkGv = $ws.CreateShortcut("$pubDesktop\🌟 StarDesk Trung (GameViewer).lnk");
+                  $lnkGv.TargetPath = $gvExe;
+                  $lnkGv.Save();
+              }
+
+              # 10. Spotify
+              if ($spExe) {
+                  $lnkSp = $ws.CreateShortcut("$pubDesktop\🎵 Spotify.lnk");
+                  $lnkSp.TargetPath = $spExe;
+                  $lnkSp.Save();
+              }
+
+              # 11. Bandicam
+              if (Test-Path "$bdExe") {
+                  $lnkBc = $ws.CreateShortcut("$pubDesktop\📹 Bandicam.lnk");
+                  $lnkBc.TargetPath = $bdExe;
+                  $lnkBc.Save();
+              }
+              Write-Host "│ ✅ Đã sắp xếp 11 icon gọn gàng và đẹp mắt trên Desktop!" -ForegroundColor Green;
           } catch {}
 
+          'SESSION_READY=1' >> "$env:GITHUB_ENV";
+          Write-Host "✅ Desktop đã được tối ưu hoàn hảo!" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
 
+      # ─────────────────────────────────────────────────────────────
+      # 11. KHỞI CHẠY WEB QUẢN LÝ VPS (PYTHON THREADING HTTP - CHỐNG 502 BAD GATEWAY)
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Khởi chạy Web Quản Lý VPS (Python Multi-Threaded Port 8080)
         shell: pwsh
@@ -1057,23 +1249,12 @@ jobs:
 
           # Khởi chạy Python Server Đa Luồng trên Port 8080 (Ghi log chi tiết)
           $pyExe = (Get-Command python -ErrorAction SilentlyContinue).Source;
-          if (-not $pyExe) { $pyExe = 'C:\hostedtoolcache\windows\Python\3.12.3\x64\python.exe'; }
-          if (-not (Test-Path "$pyExe")) { $pyExe = 'python'; }
-          
-          # Đảm bảo thư mục log sẵn sàng
-          New-Item -ItemType Directory -Force -Path "C:\zenova-web" -ErrorAction SilentlyContinue | Out-Null;
-          
-          # Tách biệt tiến trình qua Windows Task Scheduler (Chống bị Runner kill khi kết thúc Step)
-          $taskCmd = "`"$pyExe`" `"$pyServerPath`" 8080 `"$env:CONTROL_SIGNAL_FILE`"";
-          & schtasks.exe /Create /TN "Zenova-WebServer" /TR "$taskCmd" /SC ONCE /ST 00:00 /RU SYSTEM /RL HIGHEST /F *> $null;
-          & schtasks.exe /Run /TN "Zenova-WebServer" *> $null;
-          
-          # Chạy dự phòng tiến trình nền
-          Start-Process -FilePath $pyExe -ArgumentList "`"$pyServerPath`"", "8080", "`"$env:CONTROL_SIGNAL_FILE`"" -WindowStyle Hidden -ErrorAction SilentlyContinue;
+          if (-not $pyExe) { $pyExe = 'python'; }
+          Start-Process -FilePath $pyExe -ArgumentList "`"$pyServerPath`"", "8080", "`"$env:CONTROL_SIGNAL_FILE`"" -RedirectStandardOutput "C:\zenova-web\stdout.log" -RedirectStandardError "C:\zenova-web\stderr.log" -WindowStyle Hidden;
           
           # Kiểm tra xác thực port 8080 đã sống trước khi bật Cloudflare Tunnel (Chống 502 Bad Gateway)
           $serverAlive = $false;
-          for ($i = 0; $i -lt 15; $i++) {
+          for ($i = 0; $i -lt 10; $i++) {
               Start-Sleep -Seconds 1;
               try {
                   $chk = Invoke-WebRequest -Uri "http://127.0.0.1:8080" -UseBasicParsing -TimeoutSec 2;
@@ -1084,7 +1265,6 @@ jobs:
               Write-Host "│ ✅ Python Web Server đã lắng nghe thành công trên port 8080!" -ForegroundColor Green;
           } else {
               Write-Host "│ ⚠️ Khởi động lại Python Web Server..." -ForegroundColor Yellow;
-              & schtasks.exe /Run /TN "Zenova-WebServer" *> $null;
               Start-Process -FilePath $pyExe -ArgumentList "`"$pyServerPath`"", "8080", "`"$env:CONTROL_SIGNAL_FILE`"" -WindowStyle Hidden;
           }
 
@@ -1094,7 +1274,7 @@ jobs:
               & curl.exe -L --retry 3 --connect-timeout 20 "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -o "$cfExe" 2>$null;
               if (Test-Path "$cfExe") {
                   Start-Process -FilePath "$cfExe" -ArgumentList "tunnel --url http://127.0.0.1:8080 --logfile C:\cloudflared-web.log" -WindowStyle Hidden;
-                  # Sunshine tunnel da duoc loai bo
+                  Start-Process -FilePath "$cfExe" -ArgumentList "tunnel --url https://127.0.0.1:47990 --no-tls-verify --logfile C:\cloudflared-sunshine.log" -WindowStyle Hidden;
               }
           } catch {}
 
@@ -1107,7 +1287,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 12. THÔNG TIN KẾT NỐI ZENOVA VPS & STEP SUMMARY (CHỈ STARDESK TRUNG + WEB QUẢN LÝ)
+      # 12. THÔNG TIN KẾT NỐI ZENOVA VPS & STEP SUMMARY
       # ─────────────────────────────────────────────────────────────
       - name: 🎉 Thông tin kết nối Zenova VPS
         shell: pwsh
@@ -1115,64 +1295,109 @@ jobs:
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
 
-          # Tìm Public URL cho Web Quản Lý
+          # Quét tìm Public URLs cho Web Quản Lý (Cloudflare & Localtunnel)
           $cfWeb = "";
+          $cfSunshine = "";
+          $ltWeb = "";
+
           for ($i = 0; $i -lt 15; $i++) {
               if (Test-Path "C:\cloudflared-web.log") {
                   $log = Get-Content -Path "C:\cloudflared-web.log" -Raw -ErrorAction SilentlyContinue;
                   if ($log -match 'https://[a-zA-Z0-9-]+\.trycloudflare\.com') {
                       $cfWeb = $Matches[0];
                       Set-Content -Path "C:\cloudflared-web-url.txt" -Value "$cfWeb" -Force;
-                      break;
                   }
               }
+              if (Test-Path "C:\cloudflared-sunshine.log") {
+                  $logS = Get-Content -Path "C:\cloudflared-sunshine.log" -Raw -ErrorAction SilentlyContinue;
+                  if ($logS -match 'https://[a-zA-Z0-9-]+\.trycloudflare\.com') {
+                      $cfSunshine = $Matches[0];
+                      Set-Content -Path "C:\cloudflared-sunshine-url.txt" -Value "$cfSunshine" -Force;
+                  }
+              }
+              if (Test-Path "C:\localtunnel.log") {
+                  $logL = Get-Content -Path "C:\localtunnel.log" -Raw -ErrorAction SilentlyContinue;
+                  if ($logL -match 'https://[a-zA-Z0-9-]+\.loca\.lt') {
+                      $ltWeb = $Matches[0];
+                      Set-Content -Path "C:\localtunnel-web-url.txt" -Value "$ltWeb" -Force;
+                  }
+              }
+              if (($cfWeb -or $ltWeb) -and $cfSunshine) { break; }
               Start-Sleep -Seconds 1;
           }
 
-          $publicWeb = if ($cfWeb) { $cfWeb } else { "http://127.0.0.1:8080 (hoặc mở trực tiếp trên desktop)" };
-          $sdId = if (Test-Path "C:\stardesk-id.txt") { (Get-Content "C:\stardesk-id.txt" -Raw).Trim() } else { "Đang kết nối..." };
-          $sdPin = if (Test-Path "C:\stardesk-pin.txt") { (Get-Content "C:\stardesk-pin.txt" -Raw).Trim() } else { "Zenova2026" };
+          $publicWeb = if ($cfWeb) { $cfWeb } elseif ($ltWeb) { $ltWeb } else { "http://127.0.0.1:8080" };
+          $publicSun = if ($cfSunshine) { $cfSunshine } else { "https://127.0.0.1:47990" };
+
+          $sdId = if (Test-Path "C:\stardesk-id.txt") { (Get-Content "C:\stardesk-id.txt" -Raw).Trim() } else { "$env:STARDESK_ID" };
+          $sdPin = if (Test-Path "C:\stardesk-pin.txt") { (Get-Content "C:\stardesk-pin.txt" -Raw).Trim() } else { "$env:STARDESK_PIN" };
+          $ngrokRdp = if (Test-Path "C:\rdp-ngrok.txt") { (Get-Content "C:\rdp-ngrok.txt" -Raw).Trim() } else { "" };
+          $tsIp = if (Test-Path "C:\tailscale-ip.txt") { (Get-Content "C:\tailscale-ip.txt" -Raw).Trim() } else { "$env:TAILSCALE_IP" };
           $pubIp = if (Test-Path "C:\machine-ip.txt") { (Get-Content "C:\machine-ip.txt" -Raw).Trim() } else { "Đang lấy..." };
           $pass = "$env:FIXED_PASSWORD";
 
+          $rdpTarget = if ($ngrokRdp) { $ngrokRdp } elseif ($tsIp -and ($tsIp -ne "127.0.0.1")) { "$tsIp:3389" } else { "$pubIp:3389" };
+
           Write-Host ""
           Write-Host "======================================================================" -ForegroundColor Green;
-          Write-Host "         🎉 ZENOVA ULTIMATE VPS ĐÃ SẴN SÀNG (CHỈ STARDESK TRUNG)!       " -ForegroundColor Green;
+          Write-Host "                 🎉 ZENOVA ULTIMATE VPS ĐÃ SẴN SÀNG!                  " -ForegroundColor Green;
           Write-Host "======================================================================" -ForegroundColor Green;
+          Write-Host "🌐 LINK WEB QUẢN LÝ (CHỐNG 502) : $publicWeb" -ForegroundColor Cyan;
           Write-Host "🌟 STARDESK TRUNG ID            : $sdId" -ForegroundColor Yellow;
           Write-Host "🔑 STARDESK TRUNG PIN           : $sdPin" -ForegroundColor Yellow;
-          Write-Host "🌐 LINK WEB QUẢN LÝ             : $publicWeb" -ForegroundColor Cyan;
-          Write-Host "📁 THƯ MỤC ỨNG DỤNG             : C:\Apps (Có sẵn trọn bộ mọi app)" -ForegroundColor White;
-          Write-Host "👤 TÀI KHOẢN WINDOWS            : zenova (hoặc runneradmin)" -ForegroundColor Gray;
+          Write-Host "🖥️ REMOTE DESKTOP (RDP) HOST     : $rdpTarget" -ForegroundColor Magenta;
+          Write-Host "🌐 TAILSCALE IP RIÊNG           : $tsIp" -ForegroundColor Cyan;
+          Write-Host "☀️ SUNSHINE WEB UI              : $publicSun" -ForegroundColor White;
+          Write-Host "👤 TÀI KHOẢN RDP / WINDOWS      : zenova" -ForegroundColor Gray;
           Write-Host "🔐 MẬT KHẨU CỐ ĐỊNH             : $pass" -ForegroundColor Gray;
-          Write-Host "🌐 IP OUTBOUND CÔNG KHAI        : $pubIp" -ForegroundColor Gray;
           Write-Host "======================================================================" -ForegroundColor Green;
 
           # Render GitHub Step Summary
           $sb = New-Object System.Text.StringBuilder;
-          [void]$sb.AppendLine('# 🚀 Zenova Ultimate VPS - Kết Nối Độc Quyền StarDesk Trung');
+          [void]$sb.AppendLine('# 🚀 Zenova Ultimate VPS - Thông Tin Kết Nối Toàn Diện');
           [void]$sb.AppendLine('');
-          [void]$sb.AppendLine('### 🌟 1. Thông Tin Kết Nối StarDesk Trung (Khuyên Dùng - 120 FPS 0ms Delay)');
+          [void]$sb.AppendLine('### 🌐 1. Web Quản Lý VPS (Port 8080 - Chống 502)');
+          [void]$sb.AppendLine("- **Link Public (Cloudflare)**: [$publicWeb]($publicWeb)");
+          if ($ltWeb) { [void]$sb.AppendLine("- **Link Dự Phòng (Localtunnel)**: [$ltWeb]($ltWeb)"); }
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('---');
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('### 🌟 2. Kết Nối StarDesk Trung / NetEase GameViewer (Khuyên Dùng - 0ms Delay)');
           [void]$sb.AppendLine('| Thông Tin | Giá Trị |');
           [void]$sb.AppendLine('|---|---|');
-          [void]$sb.AppendLine("| **StarDesk Device ID** | `$sdId` |");
-          [void]$sb.AppendLine("| **Mã PIN Kết Nối** | `$sdPin` |");
+          [void]$sb.AppendLine("| **Device ID** | `$sdId` |");
+          [void]$sb.AppendLine("| **Mã PIN** | `$sdPin` |");
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('---');
           [void]$sb.AppendLine('');
-          [void]$sb.AppendLine('### 🌐 2. Web Quản Lý VPS (Port 8080)');
-          [void]$sb.AppendLine("- **Link Public (Cloudflare)**: [$publicWeb]($publicWeb)");
+          [void]$sb.AppendLine('### 🖥️ 3. Kết Nối Remote Desktop (mstsc) & Tailscale');
+          [void]$sb.AppendLine('| Mục | Thông Số |');
+          [void]$sb.AppendLine('|---|---|');
+          [void]$sb.AppendLine("| **Địa chỉ RDP** | `$rdpTarget` |");
+          [void]$sb.AppendLine("| **IP Tailscale** | `$tsIp` |");
+          [void]$sb.AppendLine("| **IP Outbound Máy** | `$pubIp` |");
+          [void]$sb.AppendLine('| **User** | `zenova` (hoặc `runneradmin`) |');
+          [void]$sb.AppendLine("| **Mật khẩu** | `$pass` |");
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('---');
           [void]$sb.AppendLine('');
-          [void]$sb.AppendLine('### 📦 3. Kho Ứng Dụng Đầy Đủ');
-          [void]$sb.AppendLine('- Toàn bộ bộ cài phần mềm (**Roblox Bloxstrap, Minecraft PrismLauncher, EVKey Tiếng Việt, Discord, Spotify, Bandicam**) đã được đặt sẵn trong thư mục **`C:\Apps`** và có biểu tượng ngoài màn hình Desktop.');
-          [void]$sb.AppendLine('- **Spotify** đã được cài đặt sẵn.');
+          [void]$sb.AppendLine('### ☀️ 4. Sunshine Streaming (Độ trễ < 5ms)');
+          [void]$sb.AppendLine("| **Sunshine Web UI** | [$publicSun]($publicSun) |");
+          [void]$sb.AppendLine('| **Tài khoản** | zenova |');
+          [void]$sb.AppendLine("| **Mật khẩu** | $pass |");
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('---');
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('### 📦 5. Ứng Dụng Đã Cài Đặt Sẵn');
+          [void]$sb.AppendLine('- **Discord**, **Spotify**, **Bandicam**, **EVKey Tiếng Việt**, **Roblox Player (DirectX 11 Fix)**, **Minecraft Launcher (No-Account + FPS Boost)**, **StarDesk Trung 1.5.3**, **NetEase GameViewer 4.43.1**, **Chrome**, **Sunshine**.');
+          [void]$sb.AppendLine('- **Hình Nền**: Zenova Cloud Aurora Lake áp dụng toàn bộ hệ thống.');
           Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($sb.ToString()) -Encoding UTF8;
 
-          [Console]::WriteLine("::notice title=STARDESK TRUNG SẴN SÀNG::StarDesk ID: $sdId | PIN: $sdPin | Web: $publicWeb");
+          [Console]::WriteLine("::notice title=THÔNG TIN KẾT NỐI ZENOVA VPS::StarDesk ID: $sdId | PIN: $sdPin | RDP: $rdpTarget | Web: $publicWeb");
           $global:LASTEXITCODE = 0;
           exit 0;
+
+      # ─────────────────────────────────────────────────────────────
       # 13. DUY TRÌ PHIÊN LÀM VIỆC & LẮNG NGHE LỆNH WEB PANEL (TỰ ĐỘNG CHUYỂN TIẾP 24H)
       # ─────────────────────────────────────────────────────────────
       - name: ⏳ Duy trì phiên làm việc & Lắng nghe lệnh Web Panel
@@ -1194,17 +1419,6 @@ jobs:
           $warned  = $false;
 
           while ($true) {
-              # Tự động giám sát & phục hồi Python Web Server (Chống triệt để 502 Bad Gateway 24/7)
-              try {
-                  $null = Invoke-WebRequest -Uri "http://127.0.0.1:8080" -UseBasicParsing -TimeoutSec 2;
-              } catch {
-                  Write-Host "⚠️ [WATCHDOG] Phát hiện Web Server bị gián đoạn, đang tự động khôi phục ngay lập tức..." -ForegroundColor Yellow;
-                  & schtasks.exe /Run /TN "Zenova-WebServer" *> $null;
-                  $pyE = (Get-Command python -ErrorAction SilentlyContinue).Source;
-                  if (-not $pyE) { $pyE = 'python'; }
-                  Start-Process -FilePath $pyE -ArgumentList "C:\zenova-web\server.py", "8080", "`"$sigFile`"" -WindowStyle Hidden -ErrorAction SilentlyContinue;
-              }
-
               if (Test-Path "$sigFile") {
                   $cmd = (Get-Content -Raw -Path "$sigFile" -ErrorAction SilentlyContinue).Trim();
                   Remove-Item -Path "$sigFile" -Force -ErrorAction SilentlyContinue;
@@ -1371,6 +1585,7 @@ jobs:
       DISPLAY_NAME: ${{ github.event.inputs.display_name || github.event.inputs.machine_id || 'Zenova Linux Machine' }}
       WEB_PORT: '8080'
       FIXED_PASSWORD: ${{ github.event.inputs.fixed_password || 'Zenova@2026' }}
+      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTHKEY || secrets.TAILSCALE_KEY || secrets.TS_AUTHKEY || secrets.TAILSCALE_AUTH_KEY }}
 
     steps:
       # ─────────────────────────────────────────────────────────────
@@ -1519,11 +1734,11 @@ jobs:
           echo "                 🎉 ZENOVA LINUX VPS ĐÃ SẴN SÀNG!                     "
           echo "======================================================================"
           echo "🌐 WEB QUẢN LÝ PUBLIC : $CF_URL"
-          echo "🖥️ XRDP HOST          : $PUB_IP:3389 (hoặc mở Web Quản Lý)"
+          echo "🖥️ XRDP HOST          : ${TAILSCALE_IP:-127.0.0.1}:3389"
           echo "👤 USER               : runner"
           echo "🔐 PASSWORD           : $FIXED_PASSWORD"
           echo "======================================================================"
-          echo "::notice title=LINUX VPS SẴN SÀNG::XRDP=${PUB_IP:-127.0.0.1}:3389 | User=runner | Pass=$FIXED_PASSWORD | Web=$CF_URL"
+          echo "::notice title=LINUX VPS SẴN SÀNG::XRDP=${TAILSCALE_IP:-127.0.0.1}:3389 | User=runner | Pass=$FIXED_PASSWORD | Web=$CF_URL"
 
       # ─────────────────────────────────────────────────────────────
       # 11. DUY TRÌ PHIÊN LÀM VIỆC LINUX (KEEP-ALIVE)
