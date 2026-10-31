@@ -1,6 +1,6 @@
 name: 🚀 ZENOVA ULTIMATE VPS (Windows + Linux)
 
-'on':
+on:
   workflow_dispatch:
     inputs:
       os_type:
@@ -118,7 +118,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: zenova-vps-${{ github.workflow }}-${{ github.event.inputs.machine_id || inputs.machine_id || 'zenova-1' }}
+  group: zenova-vps-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -127,27 +127,27 @@ jobs:
   # =========================================================================
   Zenova-Windows:
     name: 🪟 Windows VPS (RDP + Sunshine + StarDesk Trung)
-    runs-on: ${{ github.event.inputs.windows_image || inputs.windows_image || 'windows-2022' }}
-    if: ${{ !github.event.inputs.os_type || github.event.inputs.os_type != 'linux' }}
+    runs-on: windows-2022
+    if: ${{ !github.event.inputs.os_type != 'linux' }}
     timeout-minutes: 355
 
     env:
       GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.STORAGE_GH_TOKEN || secrets.GH_TOKEN || github.token }}
       STORAGE_GH_TOKEN: ${{ secrets.STORAGE_GH_TOKEN || secrets.PAT_TOKEN || github.token }}
-      STORAGE_REPO: ${{ inputs.storage_repo || github.repository }}
+      STORAGE_REPO: ${{ github.event.inputs.storage_repo || github.repository }}
       RUNNER_GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
       RUNNER_REPO: ${{ github.repository }}
-      MACHINE_ID: ${{ inputs.machine_id || 'zenova-1' }}
-      ROOT_MACHINE_ID: ${{ inputs.root_machine_id || 'zenova-root' }}
-      DISPLAY_NAME: ${{ inputs.display_name || inputs.machine_id || 'Zenova Ultimate Machine' }}
-      DRIVE_LETTER: ${{ inputs.drive_letter || 'X' }}
-      VHD_SIZE_GB: ${{ inputs.vhd_size_gb || '45' }}
+      MACHINE_ID: ${{ github.event.inputs.machine_id || 'zenova-1' }}
+      ROOT_MACHINE_ID: ${{ github.event.inputs.root_machine_id || 'zenova-root' }}
+      DISPLAY_NAME: ${{ github.event.inputs.display_name || github.event.inputs.machine_id || 'Zenova Ultimate Machine' }}
+      DRIVE_LETTER: ${{ github.event.inputs.drive_letter || 'X' }}
+      VHD_SIZE_GB: ${{ github.event.inputs.vhd_size_gb || '45' }}
       WEB_PORT: '8080'
       SUNSHINE_WEB_PORT: '47990'
-      ENABLE_DUCKDNS: ${{ github.event.inputs.enable_duckdns || inputs.enable_duckdns }}
-      INPUT_PIN_CODE: ${{ inputs.pin_code || 'Zenova2026' }}
-      STARDESK_ID_INPUT: ${{ inputs.stardesk_id_trung || '' }}
-      NGROK_TOKEN: ${{ inputs.ngrok_token || secrets.NGROK_AUTH_TOKEN || secrets.NGROK_TOKEN }}
+      ENABLE_DUCKDNS: ${{ github.event.inputs.enable_duckdns }}
+      INPUT_PIN_CODE: ${{ github.event.inputs.pin_code || 'Zenova2026' }}
+      STARDESK_ID_INPUT: ${{ github.event.inputs.stardesk_id_trung || '' }}
+      NGROK_TOKEN: ${{ github.event.inputs.ngrok_token || secrets.NGROK_AUTH_TOKEN || secrets.NGROK_TOKEN }}
 
     steps:
       # ─────────────────────────────────────────────────────────────
@@ -156,7 +156,7 @@ jobs:
       - name: 🧱 Dựng ổ đĩa riêng & Chuẩn bị thông số
         shell: pwsh
         env:
-          INPUT_DURATION: ${{ github.event.inputs.duration || inputs.duration }}
+          INPUT_DURATION: ${{ github.event.inputs.duration }}
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -499,7 +499,7 @@ jobs:
       - name: ⚙️ Tạo User Zenova & Tối ưu tối thượng (Fix CPU 100% & Fix Lag)
         shell: pwsh
         env:
-          FIXED_PASS: ${{ github.event.inputs.fixed_password || inputs.fixed_password }}
+          FIXED_PASS: ${{ github.event.inputs.fixed_password }}
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -986,8 +986,8 @@ jobs:
           } catch {}
 
           # 7. Cài thêm gói choco phụ nếu người dùng nhập
-          if ("${{ github.event.inputs.choco_packages || inputs.choco_packages }}") {
-              $extra = "${{ github.event.inputs.choco_packages || inputs.choco_packages }}";
+          if ("${{ github.event.inputs.choco_packages }}") {
+              $extra = "${{ github.event.inputs.choco_packages }}";
               try { choco install $extra -y --no-progress --limit-output; } catch {}
           }
 
@@ -1486,7 +1486,7 @@ jobs:
         if: always()
         shell: pwsh
         env:
-          AUTO_RESTART: ${{ github.event.inputs.auto_restart || inputs.auto_restart }}
+          AUTO_RESTART: ${{ github.event.inputs.auto_restart }}
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -1503,13 +1503,13 @@ jobs:
               if ([string]::IsNullOrWhiteSpace("$wfFile")) { $wfFile = 'zenova-ultimate.yml'; }
               gh workflow run "$wfFile" --repo "$env:RUNNER_REPO" `
                       -f machine_id="$env:MACHINE_ID" `
-                      -f duration="${{ github.event.inputs.duration || inputs.duration }}" `
+                      -f duration="${{ github.event.inputs.duration }}" `
                       -f auto_restart="true" `
                       -f fixed_password="$env:FIXED_PASSWORD" `
                       -f pin_code="$env:INPUT_PIN_CODE" `
                       -f drive_letter="$env:MOUNT_LETTER" `
                       -f vhd_size_gb="$env:VHD_SIZE_GB" `
-                      -f windows_image="${{ github.event.inputs.windows_image || inputs.windows_image }}" 2>&1 | Out-Null;
+                      -f windows_image="${{ github.event.inputs.windows_image }}" 2>&1 | Out-Null;
                   Write-Host "✅ Đã gửi lệnh kích hoạt phiên tiếp theo thành công!" -ForegroundColor Green;
               } catch {
                   Write-Host "⚠️ Không thể kích hoạt tự động: $($_.Exception.Message)" -ForegroundColor Yellow;
@@ -1530,13 +1530,13 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.PAT_TOKEN || secrets.STORAGE_GH_TOKEN || secrets.GH_TOKEN || github.token }}
       STORAGE_GH_TOKEN: ${{ secrets.STORAGE_GH_TOKEN || secrets.PAT_TOKEN || github.token }}
-      STORAGE_REPO: ${{ inputs.storage_repo || github.repository }}
+      STORAGE_REPO: ${{ github.event.inputs.storage_repo || github.repository }}
       RUNNER_GH_TOKEN: ${{ secrets.PAT_TOKEN || github.token }}
       RUNNER_REPO: ${{ github.repository }}
-      MACHINE_ID: ${{ inputs.machine_id || 'zenova-linux-1' }}
-      DISPLAY_NAME: ${{ inputs.display_name || inputs.machine_id || 'Zenova Linux Machine' }}
+      MACHINE_ID: ${{ github.event.inputs.machine_id || 'zenova-linux-1' }}
+      DISPLAY_NAME: ${{ github.event.inputs.display_name || github.event.inputs.machine_id || 'Zenova Linux Machine' }}
       WEB_PORT: '8080'
-      FIXED_PASSWORD: ${{ inputs.fixed_password || 'Zenova@2026' }}
+      FIXED_PASSWORD: ${{ github.event.inputs.fixed_password || 'Zenova@2026' }}
 
     steps:
       # ─────────────────────────────────────────────────────────────
@@ -1554,7 +1554,7 @@ jobs:
 
           # Parse thời lượng
           TOTAL=1440
-          case "${{ github.event.inputs.duration || inputs.duration }}" in
+          case "${{ github.event.inputs.duration }}" in
             "1h") TOTAL=60 ;;
             "3h") TOTAL=180 ;;
             "5h") TOTAL=300 ;;
@@ -1814,11 +1814,11 @@ jobs:
             echo "🛑 Người dùng đã ngắt VPS Linux. Dừng khởi động lại."
             exit 0
           fi
-          if [ "${{ github.event.inputs.auto_restart || inputs.auto_restart }}" = "true" ] || [ "$FORCE_NEXT_SESSION" = "1" ]; then
+          if [ "${{ github.event.inputs.auto_restart }}" = "true" ] || [ "$FORCE_NEXT_SESSION" = "1" ]; then
             gh workflow run zenova-ultimate.yml --repo "$RUNNER_REPO" \
               -f os_type="linux" \
               -f machine_id="$MACHINE_ID" \
-              -f duration="${{ github.event.inputs.duration || inputs.duration }}" \
+              -f duration="${{ github.event.inputs.duration }}" \
               -f auto_restart="true" \
               -f fixed_password="$FIXED_PASSWORD" || true
             echo "✅ Đã kích hoạt phiên Linux tiếp theo!"
