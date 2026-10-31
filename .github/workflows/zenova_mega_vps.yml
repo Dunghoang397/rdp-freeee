@@ -72,16 +72,7 @@ on:
         required: false
         default: ''
         type: string
-      tailscale_key:
-        description: '🔑 Key Tailscale VPN (để trống nếu không dùng Tailscale)'
-        required: false
-        default: ''
-        type: string
-      ngrok_token:
-        description: '🔑 Mã Ngrok Token để tạo IP Remote Desktop công khai (tuỳ chọn)'
-        required: false
-        default: ''
-        type: string
+
       storage_repo:
         description: '📦 Repo lưu trữ ổ đĩa (để trống dùng chính repo này)'
         required: false
@@ -148,8 +139,8 @@ jobs:
       ENABLE_DUCKDNS: ${{ github.event.inputs.enable_duckdns || 'true' }}
       INPUT_PIN_CODE: ${{ github.event.inputs.pin_code || 'Zenova2026' }}
       STARDESK_ID_INPUT: ${{ github.event.inputs.stardesk_id_trung || '' }}
-      TAILSCALE_AUTH_KEY: ${{ github.event.inputs.tailscale_key || secrets.TAILSCALE_AUTHKEY || secrets.TAILSCALE_AUTH_KEY || secrets.TAILSCALE_KEY }}
-      NGROK_TOKEN: ${{ github.event.inputs.ngrok_token || secrets.NGROK_AUTH_TOKEN || secrets.NGROK_TOKEN }}
+      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTHKEY || secrets.TAILSCALE_KEY || secrets.TS_AUTHKEY || secrets.TAILSCALE_AUTH_KEY }}
+      NGROK_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN || secrets.NGROK_TOKEN }}
       CHOCO_PACKAGES: ${{ github.event.inputs.choco_packages || '' }}
 
     steps:
@@ -755,7 +746,7 @@ jobs:
               }
           } catch {}
 
-          # 2. Card âm thanh ảo (Non-blocking chống treo pnputil)
+          # 2. Card âm thanh ảo (Tự động tin cậy chứng chỉ Vincent Burel - Chống triệt để popup hỏi quyền)
           try {
               @('MMCSS', 'AudioEndpointBuilder', 'Audiosrv') | ForEach-Object {
                   Set-Service -Name $_ -StartupType Automatic -ErrorAction SilentlyContinue;
@@ -765,13 +756,19 @@ jobs:
               & curl.exe -L --retry 2 --connect-timeout 10 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip' -o "$vbZip" 2>$null;
               if (Test-Path "$vbZip") {
                   Expand-Archive -Path "$vbZip" -DestinationPath 'C:\VBCable' -Force;
-                  $setupExe = 'C:\VBCable\VBCABLE_Setup_x64.exe';
-                  if (Test-Path "$setupExe") {
-                      Start-Process -FilePath "$setupExe" -ArgumentList '-i', '-h' -WindowStyle Hidden;
-                      Start-Sleep -Seconds 1;
-                  }
+                  Get-ChildItem -Path 'C:\VBCable' -Filter '*.cat' -Recurse | ForEach-Object {
+                      $sig = Get-AuthenticodeSignature $_.FullName;
+                      if ($sig.SignerCertificate) {
+                          $s1 = New-Object System.Security.Cryptography.X509Certificates.X509Store 'TrustedPublisher', 'LocalMachine';
+                          $s1.Open('ReadWrite'); $s1.Add($sig.SignerCertificate); $s1.Close();
+                          $s2 = New-Object System.Security.Cryptography.X509Certificates.X509Store 'Root', 'LocalMachine';
+                          $s2.Open('ReadWrite'); $s2.Add($sig.SignerCertificate); $s2.Close();
+                      }
+                  };
+                  $inf = Get-ChildItem -Path "C:\VBCable" -Filter '*.inf' -Recurse | Select-Object -First 1;
+                  if ($inf) { pnputil /add-driver ($inf.FullName) /install *> $null; }
               }
-              Write-Host "│ ✅ Card âm thanh ảo sẵn sàng!" -ForegroundColor Green;
+              Write-Host "│ ✅ Card âm thanh ảo sẵn sàng không bao giờ hiện popup!" -ForegroundColor Green;
           } catch {}
 
           # 3. Sunshine Streaming Server (Cài siêu tốc qua MSI chính thức ~3s)
@@ -972,33 +969,17 @@ jobs:
           } catch {}
 
           # ─────────────────────────────────────────────────────────────
-          # 5. CÀI ĐẶT ROBLOX MỚI NHẤT & FIX DIRECTX 11 CHỐNG VĂNG GAME
+          # 5. CÀI ĐẶT ROBLOX QUA BLOXSTRAP (BỎ QUA CHẶN DATACENTER S3 & UNLOCK FPS)
           # ─────────────────────────────────────────────────────────────
-          Write-Host "│ 🎮 Cài đặt Roblox Player mới nhất & Fix toàn diện DirectX 11..." -ForegroundColor Cyan;
+          Write-Host "│ 🎮 Tải và cài đặt Roblox Bloxstrap (Fix triệt để lỗi Forbidden S3 & Mở khóa FPS)..." -ForegroundColor Cyan;
           try {
-              $rbxInstaller = "$env:TEMP\RobloxPlayerLauncher.exe";
-              & curl.exe -L --retry 3 --connect-timeout 20 "https://setup.rbxcdn.com/RobloxPlayerLauncher.exe" -o "$rbxInstaller" 2>$null;
-              if (Test-Path "$rbxInstaller") {
-                  Start-Process -FilePath "$rbxInstaller" -ErrorAction SilentlyContinue;
+              $bloxDir = 'C:\Bloxstrap';
+              New-Item -ItemType Directory -Force -Path $bloxDir -ErrorAction SilentlyContinue | Out-Null;
+              $bloxExe = "$bloxDir\Bloxstrap.exe";
+              & curl.exe -L --retry 3 --connect-timeout 25 "https://github.com/bloxstraplabs/bloxstrap/releases/download/v2.11.4/Bloxstrap-v2.11.4.exe" -o "$bloxExe" 2>$null;
+              if (Test-Path "$bloxExe") {
+                  Write-Host "│ ✅ Bloxstrap Roblox đã sẵn sàng tại $bloxExe!" -ForegroundColor Green;
               }
-
-              $appCompat = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers";
-              New-Item -Path $appCompat -Force -ErrorAction SilentlyContinue | Out-Null;
-
-              $robReg = "HKCU:\Software\Roblox\RobloxApp";
-              New-Item -Path $robReg -Force -ErrorAction SilentlyContinue | Out-Null;
-              Set-ItemProperty -Path $robReg -Name 'FFlagDebugGraphicsDisableDirect3D11' -Value 'false' -Force -ErrorAction SilentlyContinue;
-              Set-ItemProperty -Path $robReg -Name 'FFlagDebugGraphicsPreferD3D11' -Value 'true' -Force -ErrorAction SilentlyContinue;
-              Set-ItemProperty -Path 'HKCU:\Software\Roblox\RobloxApp' -Name 'FFlagDebugGraphicsPreferOpenGL' -Value 'false' -Force -ErrorAction SilentlyContinue;
-
-              @("C:\Program Files (x86)\Roblox", "$env:LOCALAPPDATA\Roblox", "C:\Users\zenova\AppData\Local\Roblox") | ForEach-Object {
-                  if (Test-Path "$_") {
-                      Get-ChildItem -Path "$_" -Filter 'RobloxPlayerBeta.exe' -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-                          Set-ItemProperty -Path $appCompat -Name ($_.FullName) -Value '~ HIGHDPIAWARE RUNASADMIN WIN8RTM' -Force -ErrorAction SilentlyContinue;
-                      };
-                  }
-              };
-              Write-Host "│ ✅ Đã tối ưu cấu hình đồ họa Roblox sẵn sàng!" -ForegroundColor Green;
           } catch {}
 
           # ─────────────────────────────────────────────────────────────
@@ -1147,82 +1128,106 @@ jobs:
           $luuPath = "C:\LUU-DU-LIEU-NGAY.bat";
           Set-Content -Path $luuPath -Value ($luuLines -join "`r`n") -Encoding ASCII;
 
-          # 4. Tạo Shortcuts ra Desktop của user zenova, runneradmin và Public Desktop (Chuẩn 100% hiển thị trên màn hình)
+          # 4. Sắp xếp Desktop cực gọn, đẹp mắt, chuẩn 100% không trùng lặp icon
           try {
-              $desktopDirs = @("C:\Users\Public\Desktop", "C:\Users\runneradmin\Desktop", "C:\Users\zenova\Desktop");
-              
-              # Tìm đường dẫn thực tế của các App
-              $evExe = (Get-ChildItem -Path "C:\EVKey" -Filter "*EVKey*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
-              $mcExe = (Get-ChildItem -Path "C:\PrismLauncher" -Filter "*prismlauncher*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
-              $rbxExe = (Get-ChildItem -Path @("C:\Program Files (x86)\Roblox", "C:\Users\runneradmin\AppData\Local\Roblox", "C:\Users\zenova\AppData\Local\Roblox") -Filter "*RobloxPlayerBeta*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
-              $dcExe = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Local\Discord", "C:\Users\zenova\AppData\Local\Discord") -Filter "*Discord*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
-              $gvExe = (Get-ChildItem -Path "C:\Program Files\Netease\GameViewer\bin" -Filter "GameViewer.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $pubDesktop = "C:\Users\Public\Desktop";
+              New-Item -ItemType Directory -Force -Path $pubDesktop -ErrorAction SilentlyContinue | Out-Null;
+
+              # Dọn dẹp sạch mọi file rác và trùng lặp trên Desktop user
+              @("C:\Users\runneradmin\Desktop", "C:\Users\zenova\Desktop") | ForEach-Object {
+                  Get-ChildItem -Path $_ -Filter "*.bat" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue;
+                  Get-ChildItem -Path $_ -Filter "*.url" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue;
+                  Get-ChildItem -Path $_ -Filter "*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue;
+              };
+
+              # Xóa file bat rác cũ trên Public Desktop (Lưu dữ liệu đã tích hợp trong Web Quản Lý)
+              @("LUU-DU-LIEU-NGAY.bat", "NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat", "Web-Quan-Ly-VPS.url") | ForEach-Object {
+                  Remove-Item -Path "$pubDesktop\$_" -Force -ErrorAction SilentlyContinue;
+              };
+
+              # 1. Web Quản Lý VPS (Port 8080)
+              Set-Content -Path "$pubDesktop\🌐 Web Quản Lý VPS.url" -Value "[InternetShortcut]`r`nURL=http://127.0.0.1:8080/`r`nIconIndex=0" -Encoding ASCII -Force;
+
+              # 2. Sunshine Streaming (Local trong VPS https://localhost:47990)
+              Set-Content -Path "$pubDesktop\☀️ Sunshine Streaming.url" -Value "[InternetShortcut]`r`nURL=https://localhost:47990/`r`nIconIndex=0" -Encoding ASCII -Force;
+
+              # 3. Phím tắt Ngắt VPS khẩn cấp có xác nhận an toàn
+              Copy-Item -Path $ngatVpsPath -Destination "$pubDesktop\🛑 Ngắt VPS Khẩn Cấp.bat" -Force -ErrorAction SilentlyContinue;
+
+              # Tìm đường dẫn thực tế của các ứng dụng
+              $bloxExe = "C:\Bloxstrap\Bloxstrap.exe";
+              $mcExe   = (Get-ChildItem -Path "C:\PrismLauncher" -Filter "*prismlauncher*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $evExe   = (Get-ChildItem -Path "C:\EVKey" -Filter "*EVKey64.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $dcExe   = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Local\Discord", "C:\Users\zenova\AppData\Local\Discord") -Filter "Discord.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*app-*" } | Select-Object -First 1).FullName;
+              $gvExe   = (Get-ChildItem -Path "C:\Program Files\Netease\GameViewer\bin" -Filter "GameViewer.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $spExe   = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Roaming\Spotify", "C:\Users\zenova\AppData\Roaming\Spotify") -Filter "Spotify.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $bdExe   = 'C:\Program Files\Bandicam\bdcam.exe';
 
               $ws = New-Object -ComObject WScript.Shell;
-              foreach ($d in $desktopDirs) {
-                  New-Item -ItemType Directory -Force -Path $d -ErrorAction SilentlyContinue | Out-Null;
 
-                  # Shortcuts dạng URL và BAT (Đảm bảo 100% hoạt động không phụ thuộc COM)
-                  Set-Content -Path "$d\🌐 Web Quản Lý VPS.url" -Value "[InternetShortcut]`r`nURL=http://127.0.0.1:8080/`r`nIconIndex=0" -Encoding ASCII -Force;
-                  Set-Content -Path "$d\☀️ Sunshine Streaming.url" -Value "[InternetShortcut]`r`nURL=https://localhost:47990/`r`nIconIndex=0" -Encoding ASCII -Force;
-                  Set-Content -Path "$d\Roblox Player.url" -Value "[InternetShortcut]`r`nURL=https://www.roblox.com/home`r`nIconIndex=0" -Encoding ASCII -Force;
-                  
-                  # Phím tắt chuyển RDP và Ngắt VPS
-                  Copy-Item -Path $ngatRdpPath -Destination "$d\NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat" -Force -ErrorAction SilentlyContinue;
-                  Copy-Item -Path $ngatVpsPath -Destination "$d\🛑 NGAT-VPS-KHAN-CAP.bat" -Force -ErrorAction SilentlyContinue;
-                  Copy-Item -Path $luuPath -Destination "$d\💾 LUU-DU-LIEU-NGAY.bat" -Force -ErrorAction SilentlyContinue;
+              # 4. Ổ đĩa riêng ảo 100TB
+              $lnkDrv = $ws.CreateShortcut("$pubDesktop\📁 Ổ Đĩa 100TB.lnk");
+              $lnkDrv.TargetPath = "$($env:MOUNT_LETTER):\";
+              $lnkDrv.Save();
 
-                  try {
-                      # Ổ đĩa riêng
-                      $lnkDrv = $ws.CreateShortcut("$d\📁 Ổ Đĩa Riêng Zenova (100TB).lnk");
-                      $lnkDrv.TargetPath = "$($env:MOUNT_LETTER):\";
-                      $lnkDrv.Save();
-
-                      # EVKey
-                      if ($evExe) {
-                          $lnkEv = $ws.CreateShortcut("$d\EVKey Tiếng Việt.lnk");
-                          $lnkEv.TargetPath = $evExe;
-                          $lnkEv.WorkingDirectory = [System.IO.Path]::GetDirectoryName($evExe);
-                          $lnkEv.Save();
-                      }
-
-                      # Minecraft
-                      if ($mcExe) {
-                          $lnkMc = $ws.CreateShortcut("$d\🎮 Minecraft (Không Cần Acc - Mod Fix Lag).lnk");
-                          $lnkMc.TargetPath = $mcExe;
-                          $lnkMc.WorkingDirectory = [System.IO.Path]::GetDirectoryName($mcExe);
-                          $lnkMc.Save();
-                      }
-
-                      # Roblox Player
-                      if ($rbxExe) {
-                          $lnkRbx = $ws.CreateShortcut("$d\Roblox Player.lnk");
-                          $lnkRbx.TargetPath = $rbxExe;
-                          $lnkRbx.WorkingDirectory = [System.IO.Path]::GetDirectoryName($rbxExe);
-                          $lnkRbx.Save();
-                      }
-
-                      # StarDesk / GameViewer
-                      if ($gvExe) {
-                          $lnkGv = $ws.CreateShortcut("$d\StarDesk Trung (GameViewer).lnk");
-                          $lnkGv.TargetPath = $gvExe;
-                          $lnkGv.Save();
-                      }
-
-                      # Discord
-                      if ($dcExe) {
-                          $lnkDc = $ws.CreateShortcut("$d\Discord.lnk");
-                          $lnkDc.TargetPath = $dcExe;
-                          $lnkDc.Arguments = "--disable-gpu --no-sandbox";
-                          $lnkDc.Save();
-                      }
-                  } catch {}
+              # 5. Roblox (Bloxstrap)
+              if (Test-Path "$bloxExe") {
+                  $lnkBlox = $ws.CreateShortcut("$pubDesktop\🎮 Roblox (Bloxstrap).lnk");
+                  $lnkBlox.TargetPath = $bloxExe;
+                  $lnkBlox.WorkingDirectory = Split-Path $bloxExe;
+                  $lnkBlox.Save();
               }
-              Write-Host "│ ✅ Đã phân phối toàn bộ phím tắt App và Web Quản Lý ra Desktop!" -ForegroundColor Green;
+
+              # 6. Minecraft Launcher (Fix Lag)
+              if ($mcExe) {
+                  $lnkMc = $ws.CreateShortcut("$pubDesktop\🎮 Minecraft (Fix Lag).lnk");
+                  $lnkMc.TargetPath = $mcExe;
+                  $lnkMc.WorkingDirectory = Split-Path $mcExe;
+                  $lnkMc.Save();
+              }
+
+              # 7. EVKey Tiếng Việt
+              if ($evExe) {
+                  $lnkEv = $ws.CreateShortcut("$pubDesktop\⌨️ EVKey Tiếng Việt.lnk");
+                  $lnkEv.TargetPath = $evExe;
+                  $lnkEv.WorkingDirectory = Split-Path $evExe;
+                  $lnkEv.Save();
+              }
+
+              # 8. Discord (Chạy trực tiếp client, bypass update crash)
+              if ($dcExe) {
+                  $lnkDc = $ws.CreateShortcut("$pubDesktop\💬 Discord.lnk");
+                  $lnkDc.TargetPath = $dcExe;
+                  $lnkDc.Arguments = "--disable-gpu --no-sandbox";
+                  $lnkDc.WorkingDirectory = Split-Path $dcExe;
+                  $lnkDc.Save();
+              }
+
+              # 9. StarDesk Trung / GameViewer
+              if ($gvExe) {
+                  $lnkGv = $ws.CreateShortcut("$pubDesktop\🌟 StarDesk Trung (GameViewer).lnk");
+                  $lnkGv.TargetPath = $gvExe;
+                  $lnkGv.Save();
+              }
+
+              # 10. Spotify
+              if ($spExe) {
+                  $lnkSp = $ws.CreateShortcut("$pubDesktop\🎵 Spotify.lnk");
+                  $lnkSp.TargetPath = $spExe;
+                  $lnkSp.Save();
+              }
+
+              # 11. Bandicam
+              if (Test-Path "$bdExe") {
+                  $lnkBc = $ws.CreateShortcut("$pubDesktop\📹 Bandicam.lnk");
+                  $lnkBc.TargetPath = $bdExe;
+                  $lnkBc.Save();
+              }
+              Write-Host "│ ✅ Đã sắp xếp 11 icon gọn gàng và đẹp mắt trên Desktop!" -ForegroundColor Green;
           } catch {}
 
           'SESSION_READY=1' >> "$env:GITHUB_ENV";
-          Write-Host "✅ Đã tạo đầy đủ các phím tắt tiện ích và ngắt VPS trên Desktop!" -ForegroundColor Green;
+          Write-Host "✅ Desktop đã được tối ưu hoàn hảo!" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
 
@@ -1343,7 +1348,7 @@ jobs:
           Write-Host "🖥️ REMOTE DESKTOP (RDP) HOST     : $rdpTarget" -ForegroundColor Magenta;
           Write-Host "🌐 TAILSCALE IP RIÊNG           : $tsIp" -ForegroundColor Cyan;
           Write-Host "☀️ SUNSHINE WEB UI              : $publicSun" -ForegroundColor White;
-          Write-Host "👤 TÀI KHOẢN RDP / WINDOWS      : zenova (hoặc runneradmin)" -ForegroundColor Gray;
+          Write-Host "👤 TÀI KHOẢN RDP / WINDOWS      : zenova" -ForegroundColor Gray;
           Write-Host "🔐 MẬT KHẨU CỐ ĐỊNH             : $pass" -ForegroundColor Gray;
           Write-Host "======================================================================" -ForegroundColor Green;
 
@@ -1378,7 +1383,7 @@ jobs:
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('### ☀️ 4. Sunshine Streaming (Độ trễ < 5ms)');
           [void]$sb.AppendLine("| **Sunshine Web UI** | [$publicSun]($publicSun) |");
-          [void]$sb.AppendLine('| **Tài khoản** | zenova (hoặc runneradmin) |');
+          [void]$sb.AppendLine('| **Tài khoản** | zenova |');
           [void]$sb.AppendLine("| **Mật khẩu** | $pass |");
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('---');
@@ -1580,7 +1585,7 @@ jobs:
       DISPLAY_NAME: ${{ github.event.inputs.display_name || github.event.inputs.machine_id || 'Zenova Linux Machine' }}
       WEB_PORT: '8080'
       FIXED_PASSWORD: ${{ github.event.inputs.fixed_password || 'Zenova@2026' }}
-      TAILSCALE_AUTH_KEY: ${{ github.event.inputs.tailscale_key || secrets.TAILSCALE_AUTHKEY || secrets.TAILSCALE_AUTH_KEY || secrets.TAILSCALE_KEY }}
+      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTHKEY || secrets.TAILSCALE_KEY || secrets.TS_AUTHKEY || secrets.TAILSCALE_AUTH_KEY }}
 
     steps:
       # ─────────────────────────────────────────────────────────────
