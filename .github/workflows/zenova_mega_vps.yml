@@ -1102,6 +1102,9 @@ jobs:
           Write-Host "✅ Web Quản Lý VPS đã chạy nền tại cổng $env:WEB_PORT" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
+      # ─────────────────────────────────────────────────────────────
+      # 12. IN THÔNG TIN KẾT NỐI TOÀN DIỆN & STEP SUMMARY
+      # ─────────────────────────────────────────────────────────────
       - name: 🎉 Thông tin kết nối Zenova VPS
         shell: pwsh
         run: |
@@ -1162,59 +1165,54 @@ jobs:
           Write-Host "   - Giữ màn   : Chạy NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat trên Desktop" -ForegroundColor Gray
           Write-Host "======================================================================" -ForegroundColor Cyan
 
-          # Ghi vào GitHub Actions Step Summary
-          $sumLines = @(
-              "# 🚀 ZENOVA ULTIMATE VPS - THÔNG TIN KẾT NỐI",
-              "",
-              "### 🌐 1. Trang Quản Lý VPS (Port 8080)",
-              "- **Link Public Trực Tiếp**: [$cfWeb]($cfWeb)",
-              "- **Tailscale**: `http://$tsIp:8080`",
-              "- **Local**: `http://127.0.0.1:8080`",
-              "- **Tính năng**: Lưu dữ liệu ngay (Save Now), Khởi động lại phiên (Restart), Ngắt VPS (Stop)!",
-              "",
-              "---",
-              "",
-              "### 🌟 2. Kết Nối Qua StarDesk Trung / GameViewer (Cực Nhanh, Không Lag)",
-              "| Thông Số | Giá Trị |",
-              "|---|---|",
-              "| **Device ID** | **`$sdId`** |",
-              "| **Mã PIN** | **`$sdPin`** |",
-              "| **Giao thức** | NetEase P2P Hardware Streaming (Direct 60-120fps) |",
-              "",
-              "---",
-              "",
-              "### ☀️ 3. Kết Nối Sunshine & Moonlight Streaming",
-              "| Thông Số | Giá Trị |",
-              "|---|---|",
-              "| **Sunshine Web UI** | [$cfSunshine]($cfSunshine) |",
-              "| **Tài khoản** | `zenova` (hoặc `runneradmin`) |",
-              "| **Mật khẩu** | `$pass` |",
-              "",
-              "---",
-              "",
-              "### 🖥️ 4. Kết Nối Windows Remote Desktop (RDP)",
-              "| Thông Số | Giá Trị |",
-              "|---|---|",
-              "| **Địa chỉ** | `$tsIp:3389` |",
-              "| **Tài khoản** | `zenova` (hoặc `runneradmin`) |",
-              "| **Mật khẩu** | `$pass` |",
-              "| **Phím tắt ngắt RDP** | `NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat` trên Desktop |",
-              "",
-              "---",
-              "",
-              "### 📦 5. Ứng Dụng Đã Cài Đặt Sẵn",
-              "- **Discord**, **Spotify**, **Bandicam**, **EVKey Tiếng Việt**, **Roblox (Fix DirectX 11)**, **Google Chrome**, **StarDesk Trung 1.5.3**, **NetEase GameViewer 4.43.1**.",
-              "- **Hình Nền**: Zenova Cloud Aurora Lake áp dụng toàn bộ hệ thống."
-          );
-          Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($sumLines -join "`r`n") -Encoding UTF8;
+          # Ghi vào GitHub Actions Step Summary bằng StringBuilder an toàn tuyệt đối
+          $sb = New-Object System.Text.StringBuilder;
+          [void]$sb.AppendLine('# 🚀 ZENOVA ULTIMATE VPS - THÔNG TIN KẾT NỐI');
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('### 🌐 1. Trang Quản Lý VPS (Port 8080)');
+          [void]$sb.AppendLine("- **Link Public Trực Tiếp**: [$cfWeb]($cfWeb)");
+          [void]$sb.AppendLine("- **Tailscale**: http://" + $tsIp + ":8080");
+          [void]$sb.AppendLine('- **Local**: http://127.0.0.1:8080');
+          [void]$sb.AppendLine('- **Tính năng**: Lưu dữ liệu ngay (Save Now), Khởi động lại phiên (Restart), Ngắt VPS (Stop)!');
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('---');
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('### 🌟 2. Kết Nối Qua StarDesk Trung / GameViewer (Cực Nhanh, Không Lag)');
+          [void]$sb.AppendLine('| Thông Số | Giá Trị |');
+          [void]$sb.AppendLine('|---|---|');
+          [void]$sb.AppendLine("| **Device ID** | **$sdId** |");
+          [void]$sb.AppendLine("| **Mã PIN** | **$sdPin** |");
+          [void]$sb.AppendLine('| **Giao thức** | NetEase P2P Hardware Streaming (Direct 60-120fps) |');
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('---');
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('### ☀️ 3. Kết Nối Sunshine & Moonlight Streaming');
+          [void]$sb.AppendLine('| Thông Số | Giá Trị |');
+          [void]$sb.AppendLine('|---|---|');
+          [void]$sb.AppendLine("| **Sunshine Web UI** | [$cfSunshine]($cfSunshine) |");
+          [void]$sb.AppendLine('| **Tài khoản** | zenova (hoặc runneradmin) |');
+          [void]$sb.AppendLine("| **Mật khẩu** | $pass |");
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('---');
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('### 🖥️ 4. Kết Nối Windows Remote Desktop (RDP)');
+          [void]$sb.AppendLine('| Thông Số | Giá Trị |');
+          [void]$sb.AppendLine('|---|---|');
+          [void]$sb.AppendLine("| **Địa chỉ** | " + $tsIp + ":3389 |");
+          [void]$sb.AppendLine('| **Tài khoản** | zenova (hoặc runneradmin) |');
+          [void]$sb.AppendLine("| **Mật khẩu** | $pass |");
+          [void]$sb.AppendLine('| **Phím tắt ngắt RDP** | NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat trên Desktop |');
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('---');
+          [void]$sb.AppendLine('');
+          [void]$sb.AppendLine('### 📦 5. Ứng Dụng Đã Cài Đặt Sẵn');
+          [void]$sb.AppendLine('- **Discord**, **Spotify**, **Bandicam**, **EVKey Tiếng Việt**, **Roblox (Fix DirectX 11)**, **Google Chrome**, **StarDesk Trung 1.5.3**, **NetEase GameViewer 4.43.1**.');
+          [void]$sb.AppendLine('- **Hình Nền**: Zenova Cloud Aurora Lake áp dụng toàn bộ hệ thống.');
+          Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($sb.ToString()) -Encoding UTF8;
 
           [Console]::WriteLine("::notice title=THÔNG TIN KẾT NỐI ZENOVA VPS::StarDesk ID: $sdId | PIN: $sdPin | Web: $cfWeb | Sunshine: $cfSunshine");
           $global:LASTEXITCODE = 0;
           exit 0;
-
-      # ─────────────────────────────────────────────────────────────
-      # 13. DUY TRÌ PHIÊN LÀM VIỆC & LẮNG NGHE LỆNH WEB PANEL
-      # ─────────────────────────────────────────────────────────────
       - name: ⏳ Duy trì phiên làm việc & Lắng nghe lệnh Web Panel
         id: keepalive
         shell: pwsh
