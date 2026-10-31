@@ -210,13 +210,15 @@ jobs:
           Write-Host "💽 Đang khởi tạo ổ đĩa riêng ${dl}:\ ($env:VHD_SIZE_GB GB Dynamic VHDX)..." -ForegroundColor Cyan;
           $mounted = $false;
           try {
-              if (-not (Test-Path "$vhdFile")) {
-                  New-VHD -Path "$vhdFile" -SizeBytes ($sizeBytes) -Dynamic | Mount-VHD -PassThru | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -DriveLetter "$dl" -UseMaximumSize | Format-Volume -FileSystem NTFS -NewFileSystemLabel 'ZENOVA-OS' -Confirm:($false) | Out-Null;
-              } else {
-                  Mount-VHD -Path "$vhdFile";
+              if (Get-Command New-VHD -ErrorAction SilentlyContinue) {
+                  if (-not (Test-Path "$vhdFile")) {
+                      New-VHD -Path "$vhdFile" -SizeBytes ($sizeBytes) -Dynamic | Mount-VHD -PassThru | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -DriveLetter "$dl" -UseMaximumSize | Format-Volume -FileSystem NTFS -NewFileSystemLabel 'ZENOVA-OS' -Confirm:($false) | Out-Null;
+                  } else {
+                      Mount-VHD -Path "$vhdFile";
+                  }
+                  $null = Get-PSDrive -Name "$dl" -ErrorAction Stop;
+                  if (Test-Path "${dl}:\") { $mounted = $true; }
               }
-              $null = Get-PSDrive -Name "$dl" -ErrorAction Stop;
-              if (Test-Path "${dl}:\") { $mounted = $true; }
           } catch {
               Write-Host "⚠️ Fallback sang cơ chế Kernel DOS Devices cho ${dl}:\..." -ForegroundColor Yellow;
           }
@@ -224,6 +226,11 @@ jobs:
           if (-not ($mounted)) {
               $fallbackDir = [System.IO.Path]::Combine("$vhdContainer", 'VIRTUAL-DRIVE-ROOT');
               New-Item -ItemType Directory -Force -Path "$fallbackDir" -ErrorAction SilentlyContinue | Out-Null;
+              try {
+                  $typeDef = 'using System; using System.Runtime.InteropServices; public class KernelDisk { [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)] public static extern bool DefineDosDevice(int dwFlags, string lpDeviceName, string lpTargetPath); }';
+                  Add-Type -TypeDefinition $typeDef -ErrorAction SilentlyContinue;
+                  [KernelDisk]::DefineDosDevice(0, "${dl}:", "$fallbackDir");
+              } catch {}
               & subst "${dl}:" "$fallbackDir" 2>$null;
               Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\DOS Devices' -Name "${dl}:" -Value "\??\$fallbackDir" -Type String -Force -ErrorAction SilentlyContinue;
               $null = New-PSDrive -Name "$dl" -PSProvider FileSystem -Root "${dl}:\" -Scope Global -ErrorAction SilentlyContinue;
@@ -511,7 +518,7 @@ jobs:
           } catch {}
 
           $user = "zenova";
-          $pass = "$env:FIXED_PASS";
+          $pass = if ($env:FIXED_PASS) { $env:FIXED_PASS } else { "Zenova@2026" };
           "FIXED_PASSWORD=$pass" >> "$env:GITHUB_ENV";
 
           # Tạo User zenova (Tương thích 100% Windows Server 2022 & Server 2025)
@@ -651,7 +658,7 @@ jobs:
           } catch {}
 
           # 2. Ngrok TCP Tunnel cho Remote Desktop (Port 3389)
-          $ngTok = if ("$env:NGROK_AUTH_TOKEN") { "$env:NGROK_AUTH_TOKEN" } else { "" };
+          $ngTok = if ($env:NGROK_TOKEN) { $env:NGROK_TOKEN } elseif ($env:NGROK_AUTH_TOKEN) { $env:NGROK_AUTH_TOKEN } else { "" };
           if ($ngTok) {
               Write-Host "│ 🔑 Tìm thấy Ngrok Token! Đang thiết lập Remote Desktop công khai..." -ForegroundColor Cyan;
               try {
@@ -1175,30 +1182,31 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 11. KHỞI CHẠY WEB QUẢN LÝ VPS (PORT 8080)
+      # 11. KIỂM TRA TRẠNG THÁI WEB QUẢN LÝ VPS (PORT 8080)
       # ─────────────────────────────────────────────────────────────
-      # ─────────────────────────────────────────────────────────────
-      # 11. KHỞI CHẠY WEB QUẢN LÝ VPS (PORT 8080)
-      # ─────────────────────────────────────────────────────────────
-      - name: 🌐 Khởi chạy Web Quản Lý VPS (Port 8080)
+      - name: 🌐 Kiểm tra trạng thái Web Quản Lý VPS (Port 8080)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          Write-Host "🌐 Đang khởi chạy Web Quản Lý VPS..." -ForegroundColor Cyan;
-          $webDir = 'C:\zenova-web';
-          New-Item -ItemType Directory -Force -Path $webDir -ErrorAction SilentlyContinue | Out-Null;
-          $webScript = [System.IO.Path]::Combine($webDir, 'server.ps1');
+          Write-Host "🌐 Đang kiểm tra Web Quản Lý VPS (Port 8080)..." -ForegroundColor Cyan;
+          $webScript = 'C:\zenova-web\server.ps1';
+          $running = $false;
+          try {
+              $test = Invoke-WebRequest -Uri "http://127.0.0.1:$env:WEB_PORT" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue;
+              if ($test.StatusCode -eq 200) { $running = $true; }
+          } catch {}
 
-          $b64 = 'cGFyYW0oW2ludF0kUG9ydCA9IDgwODAsIFtzdHJpbmddJFNpZ25hbEZpbGUgPSAiIikKCiRsaXN0ZW5lciA9IE5ldy1PYmplY3QgU3lzdGVtLk5ldC5IdHRwTGlzdGVuZXIKJGxpc3RlbmVyLlByZWZpeGVzLkFkZCgiaHR0cDovLyo6IiArICRQb3J0ICsgIi8iKQokbGlzdGVuZXIuU3RhcnQoKQoKd2hpbGUgKCRsaXN0ZW5lci5Jc0xpc3RlbmluZykgewogICAgdHJ5IHsKICAgICAgICAkY3R4ID0gJGxpc3RlbmVyLkdldENvbnRleHQoKQogICAgICAgICRyZXEgPSAkY3R4LlJlcXVlc3QKICAgICAgICAkcmVzID0gJGN0eC5SZXNwb25zZQogICAgICAgICRyZXMuSGVhZGVycy5BZGQoIkFjY2Vzcy1Db250cm9sLUFsbG93LU9yaWdpbiIsICIqIikKICAgICAgICAkcGF0aCA9ICRyZXEuVXJsLkFic29sdXRlUGF0aC5Ub0xvd2VyKCkKCiAgICAgICAgaWYgKCRyZXEuSHR0cE1ldGhvZCAtZXEgIlBPU1QiKSB7CiAgICAgICAgICAgICRjbWQgPSAiIgogICAgICAgICAgICBpZiAoJHBhdGggLWVxICIvc3RvcCIpIHsgJGNtZCA9ICJTVE9QX1NFU1NJT04iIH0KICAgICAgICAgICAgZWxzZWlmICgkcGF0aCAtZXEgIi9yZXN0YXJ0IikgeyAkY21kID0gIlJFU1RBUlRfU0VTU0lPTiIgfQogICAgICAgICAgICBlbHNlaWYgKCRwYXRoIC1lcSAiL3NhdmUiKSB7ICRjbWQgPSAiU0FWRV9OT1ciIH0KICAgICAgICAgICAgZWxzZSB7CiAgICAgICAgICAgICAgICAkc3IgPSBOZXctT2JqZWN0IFN5c3RlbS5JTy5TdHJlYW1SZWFkZXIoJHJlcS5JbnB1dFN0cmVhbSkKICAgICAgICAgICAgICAgICRib2R5ID0gJHNyLlJlYWRUb0VuZCgpCiAgICAgICAgICAgICAgICB0cnkgeyAkY21kID0gKCRib2R5IHwgQ29udmVydEZyb20tSnNvbikuY21kIH0gY2F0Y2ggeyAkY21kID0gJGJvZHkgfQogICAgICAgICAgICB9CiAgICAgICAgICAgIGlmICgkY21kKSB7CiAgICAgICAgICAgICAgICBpZiAoJFNpZ25hbEZpbGUpIHsgU2V0LUNvbnRlbnQgLVBhdGggJFNpZ25hbEZpbGUgLVZhbHVlICRjbWQuVHJpbSgpIC1FbmNvZGluZyBVVEY4IH0KICAgICAgICAgICAgICAgICRqc29uID0gJ3sib2siOnRydWUsIm1lc3NhZ2UiOiLEkMOjIG5o4bqtbiBs4buHbmg6ICcgKyAkY21kLlRyaW0oKSArICcifScKICAgICAgICAgICAgICAgICRiID0gW1N5c3RlbS5UZXh0LkVuY29kaW5nXTo6VVRGOC5HZXRCeXRlcygkanNvbikKICAgICAgICAgICAgICAgICRyZXMuQ29udGVudFR5cGUgPSAiYXBwbGljYXRpb24vanNvbjsgY2hhcnNldD11dGYtOCIKICAgICAgICAgICAgICAgICRyZXMuT3V0cHV0U3RyZWFtLldyaXRlKCRiLCAwLCAkYi5MZW5ndGgpCiAgICAgICAgICAgICAgICAkcmVzLkNsb3NlKCkKICAgICAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgICAgIH0KICAgICAgICB9CgogICAgICAgICR0c0lwID0gaWYgKCRlbnY6VEFJTFNDQUxFX0lQKSB7ICRlbnY6VEFJTFNDQUxFX0lQIH0gZWxzZSB7ICIxMjcuMC4wLjEiIH0KICAgICAgICAkcGFzcyA9IGlmICgkZW52OkZJWEVEX1BBU1NXT1JEKSB7ICRlbnY6RklYRURfUEFTU1dPUkQgfSBlbHNlIHsgIlplbm92YUAyMDI2IiB9CiAgICAgICAgJHNkSWQgPSBpZiAoVGVzdC1QYXRoICJDOlxzdGFyZGVzay1pZC50eHQiKSB7IChHZXQtQ29udGVudCAiQzpcc3RhcmRlc2staWQudHh0IiAtUmF3KS5UcmltKCkgfSBlbHNlIHsgIsSQYW5nIGzhuqV5IElELi4uIiB9CiAgICAgICAgJHNkUGluID0gaWYgKFRlc3QtUGF0aCAiQzpcc3RhcmRlc2stcGluLnR4dCIpIHsgKEdldC1Db250ZW50ICJDOlxzdGFyZGVzay1waW4udHh0IiAtUmF3KS5UcmltKCkgfSBlbHNlIHsgIlplbm92YTIwMjYiIH0KICAgICAgICAkY2ZXZWIgPSBpZiAoVGVzdC1QYXRoICJDOlxjbG91ZGZsYXJlZC13ZWItdXJsLnR4dCIpIHsgKEdldC1Db250ZW50ICJDOlxjbG91ZGZsYXJlZC13ZWItdXJsLnR4dCIgLVJhdykuVHJpbSgpIH0gZWxzZSB7ICIiIH0KICAgICAgICAkY2ZTdW4gPSBpZiAoVGVzdC1QYXRoICJDOlxjbG91ZGZsYXJlZC1zdW5zaGluZS11cmwudHh0IikgeyAoR2V0LUNvbnRlbnQgIkM6XGNsb3VkZmxhcmVkLXN1bnNoaW5lLXVybC50eHQiIC1SYXcpLlRyaW0oKSB9IGVsc2UgeyAiIiB9CiAgICAgICAgJGRpc3BOYW1lID0gaWYgKCRlbnY6RElTUExBWV9OQU1FKSB7ICRlbnY6RElTUExBWV9OQU1FIH0gZWxzZSB7ICJaZW5vdmEgTWFjaGluZSIgfQogICAgICAgICRtYWNoSWQgPSBpZiAoJGVudjpNQUNISU5FX0lEKSB7ICRlbnY6TUFDSElORV9JRCB9IGVsc2UgeyAiemVub3ZhLTEiIH0KCiAgICAgICAgJHN1bkxpbmsgPSBpZiAoJGNmU3VuKSB7ICI8YSBocmVmPVwiIiArICRjZlN1biArICJcIiB0YXJnZXQ9XCJfYmxhbmtcIiBzdHlsZT1cImZvbnQtd2VpZ2h0OmJvbGQ7Zm9udC1zaXplOjEzcHg7Y29sb3I6IzM4YmRmOFwiPvCflJcgTeG7nyBTdW5zaGluZSBXZWIgVUkgKENsb3VkZmxhcmUpPC9hPjxicj4iIH0gZWxzZSB7ICI8c3BhbiBzdHlsZT1cImNvbG9yOiM5Y2EzYWY7Zm9udC1zaXplOjEzcHhcIj5Mb2NhbDogaHR0cHM6Ly8xMjcuMC4wLjE6NDc5OTA8L3NwYW4+PGJyPiIgfQogICAgICAgICR3ZWJCYW5uZXIgPSBpZiAoJGNmV2ViKSB7ICI8ZGl2IHN0eWxlPVwiYmFja2dyb3VuZDojMWUyOTNiO3BhZGRpbmc6MTJweDtib3JkZXItcmFkaXVzOjhweDttYXJnaW4tYm90dG9tOjIwcHg7Zm9udC1zaXplOjEzcHg7Ym9yZGVyOjFweCBzb2xpZCAjMzM0MTU1XCI+8J+MkCBMaW5rIFB1YmxpYyBXZWIgUXXhuqNuIEzDvTogPGEgaHJlZj1cIiIgKyAkY2ZXZWIgKyAiXCIgdGFyZ2V0PVwiX2JsYW5rXCIgc3R5bGU9XCJmb250LXdlaWdodDpib2xkO2NvbG9yOiMzOGJkZjhcIj4iICsgJGNmV2ViICsgIjwvYT48L2Rpdj4iIH0gZWxzZSB7ICIiIH0KCiAgICAgICAgJGh0bWwgPSBAIgo8IURPQ1RZUEUgaHRtbD48aHRtbD48aGVhZD48bWV0YSBjaGFyc2V0PSJ1dGYtOCI+PHRpdGxlPlplbm92YSBDbG91ZCBWUFMgQ29udHJvbCBQYW5lbDwvdGl0bGU+CjxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsaW5pdGlhbC1zY2FsZT0xIj4KPHN0eWxlPgpib2R5e2JhY2tncm91bmQ6IzA5MGQxNjtjb2xvcjojZjNmNGY2O2ZvbnQtZmFtaWx5OnN5c3RlbS11aSwtYXBwbGUtc3lzdGVtLHNhbnMtc2VyaWY7bWFyZ2luOjA7cGFkZGluZzoyMHB4O2Rpc3BsYXk6ZmxleDtqdXN0aWZ5LWNvbnRlbnQ6Y2VudGVyfQouY2FyZHt3aWR0aDoxMDAlO21heC13aWR0aDo4NTBweDtiYWNrZ3JvdW5kOiMxMTE4Mjc7Ym9yZGVyOjFweCBzb2xpZCAjMWYyOTM3O2JvcmRlci1yYWRpdXM6MTZweDtwYWRkaW5nOjI0cHg7Ym94LXNoYWRvdzowIDIwcHggMjVweCAtNXB4IHJnYmEoMCwwLDAsMC41KX0KLmhlYWRlcntkaXNwbGF5OmZsZXg7anVzdGlmeS1jb250ZW50OnNwYWNlLWJldHdlZW47YWxpZ24taXRlbXM6Y2VudGVyO2JvcmRlci1ib3R0b206MXB4IHNvbGlkICMxZjI5Mzc7cGFkZGluZy1ib3R0b206MTZweDttYXJnaW4tYm90dG9tOjIwcHh9Ci5iYWRnZXtiYWNrZ3JvdW5kOiMwNjVmNDY7Y29sb3I6IzM0ZDM5OTtwYWRkaW5nOjZweCAxNHB4O2JvcmRlci1yYWRpdXM6OTk5OXB4O2ZvbnQtd2VpZ2h0OjcwMDtmb250LXNpemU6MTJweDtsZXR0ZXItc3BhY2luZzowLjVweH0KLmdyaWR7ZGlzcGxheTpncmlkO2dyaWQtdGVtcGxhdGUtY29sdW1uczpyZXBlYXQoYXV0by1maXQsbWlubWF4KDI1MHB4LDFmcikpO2dhcDoxNnB4O21hcmdpbi1ib3R0b206MjRweH0KLmJveHtiYWNrZ3JvdW5kOiMxZjI5Mzc7Ym9yZGVyOjFweCBzb2xpZCAjMzc0MTUxO2JvcmRlci1yYWRpdXM6MTJweDtwYWRkaW5nOjE2cHg7cG9zaXRpb246cmVsYXRpdmV9Ci5ib3ggaDN7bWFyZ2luLXRvcDowO2ZvbnQtc2l6ZToxNnB4O2NvbG9yOiMzOGJkZjg7ZGlzcGxheTpmbGV4O2FsaWduLWl0ZW1zOmNlbnRlcjtnYXA6OHB4fQouY29kZXtiYWNrZ3JvdW5kOiMxMTE4Mjc7cGFkZGluZzo2cHggMTBweDtib3JkZXItcmFkaXVzOjZweDtmb250LWZhbWlseTptb25vc3BhY2U7Zm9udC1zaXplOjE0cHg7Y29sb3I6I2ZhY2MxNTtmb250LXdlaWdodDpib2xkO2Rpc3BsYXk6aW5saW5lLWJsb2NrO21hcmdpbi10b3A6NHB4fQouYnRuLWdyb3Vwe2Rpc3BsYXk6Z3JpZDtncmlkLXRlbXBsYXRlLWNvbHVtbnM6cmVwZWF0KGF1dG8tZml0LG1pbm1heCgxODBweCwxZnIpKTtnYXA6MTJweH0KYnV0dG9ue3BhZGRpbmc6MTRweDtib3JkZXI6bm9uZTtib3JkZXItcmFkaXVzOjEwcHg7Zm9udC13ZWlnaHQ6NzAwO2ZvbnQtc2l6ZToxNHB4O2N1cnNvcjpwb2ludGVyO3RyYW5zaXRpb246MC4ycztkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6Y2VudGVyO2p1c3RpZnktY29udGVudDpjZW50ZXI7Z2FwOjhweDtjb2xvcjojZmZmfQouYnRuLXNhdmV7YmFja2dyb3VuZDojMDI4NGM3fS5idG4tc2F2ZTpob3ZlcntiYWNrZ3JvdW5kOiMwMzY5YTF9Ci5idG4tcnN0e2JhY2tncm91bmQ6I2Q5NzcwNn0uYnRuLXJzdDpob3ZlcntiYWNrZ3JvdW5kOiNiNDUzMDl9Ci5idG4tc3RvcHtiYWNrZ3JvdW5kOiNkYzI2MjZ9LmJ0bi1zdG9wOmhvdmVye2JhY2tncm91bmQ6I2I5MWMxY30KYXtjb2xvcjojMzhiZGY4O3RleHQtZGVjb3JhdGlvbjpub25lfQphOmhvdmVye3RleHQtZGVjb3JhdGlvbjp1bmRlcmxpbmV9Cjwvc3R5bGU+PC9oZWFkPjxib2R5PjxkaXYgY2xhc3M9ImNhcmQiPgo8ZGl2IGNsYXNzPSJoZWFkZXIiPgo8ZGl2PjxoMiBzdHlsZT0ibWFyZ2luOjA7Zm9udC1zaXplOjIycHgiPvCfmoAgWkVOT1ZBIFVMVElNQVRFIFZQUzwvaDI+PHAgc3R5bGU9Im1hcmdpbjo0cHggMCAwO2NvbG9yOiM5Y2EzYWY7Zm9udC1zaXplOjEzcHgiPk3DoXk6IDxiPiRkaXNwTmFtZSAoJG1hY2hJZCk8L2I+PC9wPjwvZGl2Pgo8c3BhbiBjbGFzcz0iYmFkZ2UiPuKXjyBPTkxJTkUgJiDEkEFORyBDSOG6oFk8L3NwYW4+CjwvZGl2Pgo8ZGl2IGNsYXNzPSJncmlkIj4KPGRpdiBjbGFzcz0iYm94IiBzdHlsZT0iYm9yZGVyLWxlZnQ6NHB4IHNvbGlkICNmNTllMGIiPgo8aDM+8J+MnyAxLiBTdGFyRGVzayBUcnVuZyAoS2h1ecOqbiBEw7luZyk8L2gzPgo8cCBzdHlsZT0ibWFyZ2luOjZweCAwO2ZvbnQtc2l6ZToxM3B4O2NvbG9yOiNkMWQ1ZGIiPktow7RuZyBj4bqnbiBt4bufIHBvcnQsIDYwZnBzIG3GsOG7o3QgbcOgOjwvcD4KSUQ6IDxzcGFuIGNsYXNzPSJjb2RlIj4kc2RJZDwvc3Bhbj48YnI+ClBJTjogPHNwYW4gY2xhc3M9ImNvZGUiPiRzZFBpbjwvc3Bhbj4KPC9kaXY+CjxkaXYgY2xhc3M9ImJveCIgc3R5bGU9ImJvcmRlci1sZWZ0OjRweCBzb2xpZCAjMTBiOTgxIj4KPGgzPuKYgO+4jyAyLiBTdW5zaGluZSAmIE1vb25saWdodCBTdHJlYW08L2gzPgo8cCBzdHlsZT0ibWFyZ2luOjZweCAwO2ZvbnQtc2l6ZToxM3B4O2NvbG9yOiNkMWQ1ZGIiPldlYiBVSSBTdW5zaGluZTo8L3A+CiRzdW5MaW5rClVzZXI6IDxzcGFuIGNsYXNzPSJjb2RlIj56ZW5vdmE8L3NwYW4+PGJyPgpQYXNzOiA8c3BhbiBjbGFzcz0iY29kZSI+JHBhc3M8L3NwYW4+CjwvZGl2Pgo8ZGl2IGNsYXNzPSJib3giIHN0eWxlPSJib3JkZXItbGVmdDo0cHggc29saWQgIzNiODJmNiI+CjxoMz7wn5al77iPIDMuIFdpbmRvd3MgUmVtb3RlIERlc2t0b3A8L2gzPgo8cCBzdHlsZT0ibWFyZ2luOjZweCAwO2ZvbnQtc2l6ZToxM3B4O2NvbG9yOiNkMWQ1ZGIiPklQOiA8c3BhbiBjbGFzcz0iY29kZSI+JHRzSXA6MzM4OTwvc3Bhbj48L3A+ClVzZXI6IDxzcGFuIGNsYXNzPSJjb2RlIj56ZW5vdmE8L3NwYW4+PGJyPgpQYXNzOiA8c3BhbiBjbGFzcz0iY29kZSI+JHBhc3M8L3NwYW4+CjwvZGl2Pgo8L2Rpdj4KJHdlYkJhbm5lcgo8ZGl2IGNsYXNzPSJidG4tZ3JvdXAiPgo8YnV0dG9uIGNsYXNzPSJidG4tc2F2ZSIgb25jbGljaz0ic2VuZENtZCgnU0FWRV9OT1cnKSI+8J+SviBMxq9VIEThu64gTEnhu4ZVIE5HQVk8L2J1dHRvbj4KPGJ1dHRvbiBjbGFzcz0iYnRuLXJzdCIgb25jbGljaz0ic2VuZENtZCgnUkVTVEFSVF9TRVNTSU9OJykiPvCflIEgUkVTRVQgUEhJw4pOIE3hu5pJPC9idXR0b24+CjxidXR0b24gY2xhc3M9ImJ0bi1zdG9wIiBvbmNsaWNrPSJzZW5kQ21kKCdTVE9QX1NFU1NJT04nKSI+8J+bkSBOR+G6rlQgVlBTPC9idXR0b24+CjwvZGl2Pgo8L2Rpdj48c2NyaXB0Pgphc3luYyBmdW5jdGlvbiBzZW5kQ21kKGMpeyBpZihjb25maXJtKCdYw6FjIG5o4bqtbiB0aOG7sWMgaGnhu4duIGzhu4duaDogJytjKyc/JykpeyBsZXQgcj1hd2FpdCBmZXRjaCgnL2FwaS9jbWQnLHttZXRob2Q6J1BPU1QnLGJvZHk6SlNPTi5zdHJpbmdpZnkoe2NtZDpjfSl9KTsgbGV0IGQ9YXdhaXQgci5qc29uKCk7IGFsZXJ0KGQubWVzc2FnZSk7IH0gfQpzZXRUaW1lb3V0KCgpPT57IGxvY2F0aW9uLnJlbG9hZCgpOyB9LCAxNTAwMCk7Cjwvc2NyaXB0PjwvYm9keT48L2h0bWw+CiJACgogICAgICAgICRiID0gW1N5c3RlbS5UZXh0LkVuY29kaW5nXTo6VVRGOC5HZXRCeXRlcygkaHRtbCkKICAgICAgICAkcmVzLkNvbnRlbnRUeXBlID0gInRleHQvaHRtbDsgY2hhcnNldD11dGYtOCIKICAgICAgICAkcmVzLk91dHB1dFN0cmVhbS5Xcml0ZSgkYiwgMCwgJGIuTGVuZ3RoKQogICAgICAgICRyZXMuQ2xvc2UoKQogICAgfSBjYXRjaCB7fQp9Cg==';
-          $bytes = [Convert]::FromBase64String($b64);
-          [System.IO.File]::WriteAllBytes($webScript, $bytes);
-
-          Start-Process pwsh.exe -ArgumentList '-NoProfile', '-WindowStyle', 'Hidden', '-File', "`"$webScript`"", '-Port', "$env:WEB_PORT", '-SignalFile', "`"$env:CONTROL_SIGNAL_FILE`"";
-          Write-Host "✅ Web Quản Lý VPS đã chạy nền tại cổng $env:WEB_PORT" -ForegroundColor Green;
+          if (-not $running) {
+              Write-Host "│ 🔄 Đang khởi động Web Server..." -ForegroundColor Yellow;
+              if (Test-Path "$webScript") {
+                  Start-Process pwsh.exe -ArgumentList '-NoProfile', '-WindowStyle', 'Hidden', '-File', "`"$webScript`"", '-Port', "$env:WEB_PORT", '-SignalFile', "`"$env:CONTROL_SIGNAL_FILE`"";
+                  Start-Sleep -Seconds 2;
+              }
+          }
+          Write-Host "│ ✅ Web Quản Lý VPS đang trực tuyến tại cổng $env:WEB_PORT!" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
-      # ─────────────────────────────────────────────────────────────
       # 12. IN THÔNG TIN KẾT NỐI TOÀN DIỆN & STEP SUMMARY
       # ─────────────────────────────────────────────────────────────
       # ─────────────────────────────────────────────────────────────
@@ -1331,7 +1339,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          $endEpoch = ([long]"$env:JOB_START_EPOCH") + (([long]"$env:TOTAL_MINUTES") * 60);
+          $totalReq = [long]"$env:TOTAL_MINUTES";
+          $sessionMinutes = [Math]::Min($totalReq, 350);
+          $endEpoch = ([long]"$env:JOB_START_EPOCH") + ($sessionMinutes * 60);
           $saveScript = "$env:SAVE_SCRIPT_PATH";
           $pushScript = "$env:PUSH_STATE_SCRIPT";
           $sigFile    = "$env:CONTROL_SIGNAL_FILE";
@@ -1489,7 +1499,9 @@ jobs:
           if (($auto -eq 'true') -or ($forceNext -eq '1')) {
               Write-Host "🔁 Đang kích hoạt phiên làm việc tiếp theo..." -ForegroundColor Cyan;
               try {
-                  gh workflow run zenova-ultimate.yml --repo "$env:RUNNER_REPO" `
+                  $wfFile = if ($env:GITHUB_WORKFLOW_REF) { ($env:GITHUB_WORKFLOW_REF -split '@')[0] -replace '^.*\.github/workflows/', '' } else { 'zenova-ultimate.yml' };
+              if ([string]::IsNullOrWhiteSpace("$wfFile")) { $wfFile = 'zenova-ultimate.yml'; }
+              gh workflow run "$wfFile" --repo "$env:RUNNER_REPO" `
                       -f machine_id="$env:MACHINE_ID" `
                       -f duration="${{ inputs.duration }}" `
                       -f auto_restart="true" `
