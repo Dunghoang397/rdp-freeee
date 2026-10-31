@@ -1,4 +1,4 @@
-name: 🚀 ZENOVA ULTIMATE VPS (Windows + Linux)
+name: 'Zenova Ultimate VPS (Windows + Linux)'
 
 on:
   workflow_dispatch:
@@ -117,10 +117,6 @@ permissions:
   contents: write
   actions: write
 
-concurrency:
-  group: zenova-vps-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   # =========================================================================
   # JOB 1: ZENOVA WINDOWS RUNNER (RDP + SUNSHINE + STARDESK TRUNG + VHD)
@@ -128,7 +124,7 @@ jobs:
   Zenova-Windows:
     name: 🪟 Windows VPS (RDP + Sunshine + StarDesk Trung)
     runs-on: windows-2022
-    if: ${{ !github.event.inputs.os_type != 'linux' }}
+    if: github.event.inputs.os_type != 'linux'
     timeout-minutes: 355
 
     env:
@@ -148,6 +144,7 @@ jobs:
       INPUT_PIN_CODE: ${{ github.event.inputs.pin_code || 'Zenova2026' }}
       STARDESK_ID_INPUT: ${{ github.event.inputs.stardesk_id_trung || '' }}
       NGROK_TOKEN: ${{ github.event.inputs.ngrok_token || secrets.NGROK_AUTH_TOKEN || secrets.NGROK_TOKEN }}
+      CHOCO_PACKAGES: ${{ github.event.inputs.choco_packages || '' }}
 
     steps:
       # ─────────────────────────────────────────────────────────────
@@ -156,7 +153,7 @@ jobs:
       - name: 🧱 Dựng ổ đĩa riêng & Chuẩn bị thông số
         shell: pwsh
         env:
-          INPUT_DURATION: ${{ github.event.inputs.duration }}
+          INPUT_DURATION: ${{ github.event.inputs.duration || '24h' }}
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -499,7 +496,7 @@ jobs:
       - name: ⚙️ Tạo User Zenova & Tối ưu tối thượng (Fix CPU 100% & Fix Lag)
         shell: pwsh
         env:
-          FIXED_PASS: ${{ github.event.inputs.fixed_password }}
+          FIXED_PASS: ${{ github.event.inputs.fixed_password || 'Zenova@2026' }}
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -640,8 +637,8 @@ jobs:
       - name: 🌐 Cấu hình IP Máy, Ngrok RDP & Tailscale
         shell: pwsh
         env:
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-          NGROK_AUTH_TOKEN: ${{ env.NGROK_TOKEN }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTHKEY || secrets.TAILSCALE_AUTH_KEY || secrets.TAILSCALE_KEY }}
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN || secrets.NGROK_TOKEN }}
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -986,8 +983,8 @@ jobs:
           } catch {}
 
           # 7. Cài thêm gói choco phụ nếu người dùng nhập
-          if ("${{ github.event.inputs.choco_packages }}") {
-              $extra = "${{ github.event.inputs.choco_packages }}";
+          if ("$env:CHOCO_PACKAGES") {
+              $extra = "$env:CHOCO_PACKAGES";
               try { choco install $extra -y --no-progress --limit-output; } catch {}
           }
 
@@ -1486,7 +1483,7 @@ jobs:
         if: always()
         shell: pwsh
         env:
-          AUTO_RESTART: ${{ github.event.inputs.auto_restart }}
+          AUTO_RESTART: ${{ github.event.inputs.auto_restart || true }}
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -1503,13 +1500,13 @@ jobs:
               if ([string]::IsNullOrWhiteSpace("$wfFile")) { $wfFile = 'zenova-ultimate.yml'; }
               gh workflow run "$wfFile" --repo "$env:RUNNER_REPO" `
                       -f machine_id="$env:MACHINE_ID" `
-                      -f duration="${{ github.event.inputs.duration }}" `
+                      -f duration="${{ github.event.inputs.duration || '24h' }}" `
                       -f auto_restart="true" `
                       -f fixed_password="$env:FIXED_PASSWORD" `
                       -f pin_code="$env:INPUT_PIN_CODE" `
                       -f drive_letter="$env:MOUNT_LETTER" `
                       -f vhd_size_gb="$env:VHD_SIZE_GB" `
-                      -f windows_image="${{ github.event.inputs.windows_image }}" 2>&1 | Out-Null;
+                      -f windows_image="windows-2022" 2>&1 | Out-Null;
                   Write-Host "✅ Đã gửi lệnh kích hoạt phiên tiếp theo thành công!" -ForegroundColor Green;
               } catch {
                   Write-Host "⚠️ Không thể kích hoạt tự động: $($_.Exception.Message)" -ForegroundColor Yellow;
@@ -1524,7 +1521,7 @@ jobs:
   Zenova-Linux:
     name: 🐧 Linux VPS (XFCE4 + XRDP + Web Quản Lý)
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.os_type == 'linux' || github.event.inputs.os_type == 'both' }}
+    if: github.event.inputs.os_type == 'linux' || github.event.inputs.os_type == 'both'
     timeout-minutes: 355
 
     env:
@@ -1554,7 +1551,7 @@ jobs:
 
           # Parse thời lượng
           TOTAL=1440
-          case "${{ github.event.inputs.duration }}" in
+          case "${{ github.event.inputs.duration || '24h' }}" in
             "1h") TOTAL=60 ;;
             "3h") TOTAL=180 ;;
             "5h") TOTAL=300 ;;
@@ -1669,7 +1666,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Kết nối Tailscale Linux
         env:
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTHKEY || secrets.TAILSCALE_AUTH_KEY || secrets.TAILSCALE_KEY }}
         run: |
           if [ -n "$TAILSCALE_AUTH_KEY" ]; then
             curl -fsSL https://tailscale.com/install.sh | sh
@@ -1814,11 +1811,11 @@ jobs:
             echo "🛑 Người dùng đã ngắt VPS Linux. Dừng khởi động lại."
             exit 0
           fi
-          if [ "${{ github.event.inputs.auto_restart }}" = "true" ] || [ "$FORCE_NEXT_SESSION" = "1" ]; then
+          if [ "${{ github.event.inputs.auto_restart || 'true' }}" = "true" ] || [ "$FORCE_NEXT_SESSION" = "1" ]; then
             gh workflow run zenova-ultimate.yml --repo "$RUNNER_REPO" \
               -f os_type="linux" \
               -f machine_id="$MACHINE_ID" \
-              -f duration="${{ github.event.inputs.duration }}" \
+              -f duration="${{ github.event.inputs.duration || '24h' }}" \
               -f auto_restart="true" \
               -f fixed_password="$FIXED_PASSWORD" || true
             echo "✅ Đã kích hoạt phiên Linux tiếp theo!"
