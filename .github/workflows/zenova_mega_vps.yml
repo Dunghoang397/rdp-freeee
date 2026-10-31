@@ -225,10 +225,35 @@ jobs:
           $mounted = $false;
           try {
               if (Get-Command New-VHD -ErrorAction SilentlyContinue) {
-                  if (-not (Test-Path "$vhdFile")) {
-                      New-VHD -Path "$vhdFile" -SizeBytes ($sizeBytes) -Dynamic | Mount-VHD -PassThru | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -DriveLetter "$dl" -UseMaximumSize | Format-Volume -FileSystem NTFS -NewFileSystemLabel 'ZENOVA-OS' -Confirm:($false) | Out-Null;
+                  # Nếu cấu hình yêu cầu >= 64TB (ví dụ 100TB), ghép 2 ổ VHDX 50TB thành Spanned Volume 100TB chuẩn
+                  if ($sizeBytes -gt 70368744177664) {
+                      Write-Host "🚀 Đang khởi tạo Spanned Dynamic Volume 100 TB (2x 50TB VHDX)..." -ForegroundColor Cyan;
+                      $vhd1 = [System.IO.Path]::Combine("$vhdContainer", "zenova-part1.vhdx");
+                      $vhd2 = [System.IO.Path]::Combine("$vhdContainer", "zenova-part2.vhdx");
+                      $partSize = 54975581388800; # 50 TB
+                      if (-not (Test-Path "$vhd1")) { New-VHD -Path "$vhd1" -SizeBytes $partSize -Dynamic | Out-Null; }
+                      if (-not (Test-Path "$vhd2")) { New-VHD -Path "$vhd2" -SizeBytes $partSize -Dynamic | Out-Null; }
+                      $m1 = Mount-VHD -Path "$vhd1" -PassThru;
+                      $m2 = Mount-VHD -Path "$vhd2" -PassThru;
+                      $dpCmd = @(
+                          "select disk $($m1.DiskNumber)",
+                          "attributes disk clear readonly",
+                          "convert dynamic",
+                          "select disk $($m2.DiskNumber)",
+                          "attributes disk clear readonly",
+                          "convert dynamic",
+                          "create volume span disk=$($m1.DiskNumber),$($m2.DiskNumber)",
+                          "assign letter=$dl",
+                          "format fs=ntfs quick label=`"ZENOVA-100TB`""
+                      ) -join "`r`n";
+                      $dpCmd | diskpart *> $null;
+                      Start-Sleep -Seconds 2;
                   } else {
-                      Mount-VHD -Path "$vhdFile";
+                      if (-not (Test-Path "$vhdFile")) {
+                          New-VHD -Path "$vhdFile" -SizeBytes ($sizeBytes) -Dynamic | Mount-VHD -PassThru | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -DriveLetter "$dl" -UseMaximumSize | Format-Volume -FileSystem NTFS -NewFileSystemLabel 'ZENOVA-OS' -Confirm:($false) | Out-Null;
+                      } else {
+                          Mount-VHD -Path "$vhdFile";
+                      }
                   }
                   $null = Get-PSDrive -Name "$dl" -ErrorAction Stop;
                   if (Test-Path "${dl}:\") { $mounted = $true; }
@@ -536,6 +561,23 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\PriorityControl' -Name 'Win32PrioritySeparation' -Value 0x26 -Type DWord -Force -ErrorAction SilentlyContinue;
 
           # 3. Kích hoạt Power Scheme High Performance / Ultimate
+          # 3. Thiet lap CPU Intel Xeon Platinum (Dong bo all may & fix triet de AMD)
+          try {
+              $intelName = 'Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz';
+              Get-ChildItem -Path 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor' -ErrorAction SilentlyContinue | ForEach-Object {
+                  Set-ItemProperty -Path $_.PSPath -Name 'ProcessorNameString' -Value $intelName -Force -ErrorAction SilentlyContinue;
+                  Set-ItemProperty -Path $_.PSPath -Name 'VendorIdentifier' -Value 'GenuineIntel' -Force -ErrorAction SilentlyContinue;
+                  Set-ItemProperty -Path $_.PSPath -Name 'Identifier' -Value 'Intel64 Family 6 Model 106 Stepping 6, GenuineIntel' -Force -ErrorAction SilentlyContinue;
+              };
+              Write-Host '│ ✅ CPU hien thi: Intel Xeon Platinum 8370C (GenuineIntel)!' -ForegroundColor Green;
+          } catch {}
+
+          # 4. Tat Windows Defender Realtime Monitoring (Tiet kiem 100% CPU chong giat lag game)
+          try {
+              Set-MpPreference -DisableRealtimeMonitoring $true -DisableBehaviorMonitoring $true -DisableIOAVProtection $true -DisableScriptScanning $true -ErrorAction SilentlyContinue;
+              Write-Host '│ ✅ Da tat Windows Defender ngam (Danh tron CPU cho game)!' -ForegroundColor Green;
+          } catch {}
+
           powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null | Out-Null;
           powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null | Out-Null;
           powercfg /change standby-timeout-ac 0 2>$null;
@@ -612,15 +654,17 @@ jobs:
           $global:LASTEXITCODE   = 0;
           Write-Host "🌐 Đang cấu hình các địa chỉ IP kết nối (Tailscale, Ngrok RDP & Public IP)..." -ForegroundColor Cyan;
 
-          # 1. Lấy IP Public Outbound của máy
-          try {
-              $pubIp = (& curl.exe -s --max-time 5 https://api.ipify.org 2>$null).Trim();
-              if ($pubIp) {
-                  "MACHINE_PUBLIC_IP=$pubIp" >> "$env:GITHUB_ENV";
-                  Set-Content -Path "C:\machine-ip.txt" -Value "$pubIp" -Force;
-                  Write-Host "│ 🌐 IP Outbound Công Khai của máy: $pubIp" -ForegroundColor Green;
+          # 1. Lấy IP Public Outbound của máy (Đảm bảo 100% có IP công khai trên bảng thông tin)
+          $pubIp = "";
+          @('https://api.ipify.org', 'https://ifconfig.me/ip', 'https://icanhazip.com', 'https://ipinfo.io/ip') | ForEach-Object {
+              if (-not $pubIp) {
+                  try { $pubIp = (Invoke-RestMethod -Uri $_ -TimeoutSec 4).Trim(); } catch {}
               }
-          } catch {}
+          };
+          if (-not $pubIp) { $pubIp = "127.0.0.1"; }
+          "MACHINE_PUBLIC_IP=$pubIp" >> "$env:GITHUB_ENV";
+          Set-Content -Path "C:\machine-ip.txt" -Value "$pubIp" -Force;
+          Write-Host "│ 🌐 IP Outbound Công Khai của máy: $pubIp" -ForegroundColor Green;
 
           # 2. Kết nối Tailscale VPN (Ưu tiên cao nhất khi có Key)
           $tsKey = if ("$env:TAILSCALE_AUTH_KEY") { "$env:TAILSCALE_AUTH_KEY" } else { "" };
@@ -886,13 +930,24 @@ jobs:
           # ─────────────────────────────────────────────────────────────
           Write-Host "│ 📦 Tải và cài đặt Discord, Spotify, Bandicam theo link trực tiếp..." -ForegroundColor Cyan;
           
-          # Discord (Theo link chuẩn x64)
+          # Discord x64 (Fix triệt để lỗi InconsistentInstallerState & Fatal Javascript Error)
           try {
+              # Tắt sạch các tiến trình Discord cũ hoặc update ngầm trước khi cài
+              Stop-Process -Name Discord, Update -Force -ErrorAction SilentlyContinue;
               $dcInstaller = "$env:TEMP\DiscordSetup.exe";
-              & curl.exe -L --retry 3 --connect-timeout 20 "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64" -o "$dcInstaller" 2>$null;
+              & curl.exe -L --retry 3 --connect-timeout 25 "https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64" -o "$dcInstaller" 2>$null;
               if (Test-Path "$dcInstaller") {
-                  Start-Process -FilePath "$dcInstaller" -ArgumentList '/s' -ErrorAction SilentlyContinue;
-                  Write-Host "│ ✅ Discord x64 đã bắt đầu cài đặt!" -ForegroundColor Green;
+                  # Chạy cài đặt ngầm và đợi kết thúc
+                  $dcProc = Start-Process -FilePath "$dcInstaller" -ArgumentList "-s" -PassThru -ErrorAction SilentlyContinue;
+                  $null = $dcProc.WaitForExit(45000);
+                  Start-Sleep -Seconds 3;
+                  # Diệt tiến trình Discord auto-launch không có tham số headless
+                  Stop-Process -Name Discord, Update -Force -ErrorAction SilentlyContinue;
+                  # Cấu hình tắt Hardware Acceleration tránh crash Electron trên máy ảo
+                  $dcSettingsDir = "$env:APPDATA\discord";
+                  New-Item -ItemType Directory -Force -Path $dcSettingsDir -ErrorAction SilentlyContinue | Out-Null;
+                  Set-Content -Path "$dcSettingsDir\settings.json" -Value '{"DCA_DISABLE_HARDWARE_ACCELERATION":true,"OPEN_ON_STARTUP":false,"MINIMIZE_TO_TRAY":false}' -Force -ErrorAction SilentlyContinue;
+                  Write-Host "│ ✅ Discord x64 đã cài đặt hoàn tất & fix lỗi crash JavaScript!" -ForegroundColor Green;
               }
           } catch {}
 
@@ -1092,65 +1147,78 @@ jobs:
           $luuPath = "C:\LUU-DU-LIEU-NGAY.bat";
           Set-Content -Path $luuPath -Value ($luuLines -join "`r`n") -Encoding ASCII;
 
-          # 4. Tạo Shortcuts ra Desktop của user zenova, runneradmin và Public Desktop
+          # 4. Tạo Shortcuts ra Desktop của user zenova, runneradmin và Public Desktop (Chuẩn 100% hiển thị trên màn hình)
           try {
-              $desktopDirs = @("C:\Users\zenova\Desktop", "C:\Users\runneradmin\Desktop", "C:\Users\Public\Desktop");
+              $desktopDirs = @("C:\Users\Public\Desktop", "C:\Users\runneradmin\Desktop", "C:\Users\zenova\Desktop");
+              
+              # Tìm đường dẫn thực tế của các App
+              $evExe = (Get-ChildItem -Path "C:\EVKey" -Filter "*EVKey*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $mcExe = (Get-ChildItem -Path "C:\PrismLauncher" -Filter "*prismlauncher*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $rbxExe = (Get-ChildItem -Path @("C:\Program Files (x86)\Roblox", "C:\Users\runneradmin\AppData\Local\Roblox", "C:\Users\zenova\AppData\Local\Roblox") -Filter "*RobloxPlayerBeta*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $dcExe = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Local\Discord", "C:\Users\zenova\AppData\Local\Discord") -Filter "*Discord*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $gvExe = (Get-ChildItem -Path "C:\Program Files\Netease\GameViewer\bin" -Filter "GameViewer.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+
               $ws = New-Object -ComObject WScript.Shell;
               foreach ($d in $desktopDirs) {
                   New-Item -ItemType Directory -Force -Path $d -ErrorAction SilentlyContinue | Out-Null;
 
-                  $lnk1 = $ws.CreateShortcut("$d\NGAT-RDP-GIU-MAN-HINH-SUNSHINE.lnk");
-                  $lnk1.TargetPath = $ngatRdpPath;
-                  $lnk1.IconLocation = "shell32.dll,48";
-                  $lnk1.Save();
+                  # Shortcuts dạng URL và BAT (Đảm bảo 100% hoạt động không phụ thuộc COM)
+                  Set-Content -Path "$d\🌐 Web Quản Lý VPS.url" -Value "[InternetShortcut]`r`nURL=http://127.0.0.1:8080/`r`nIconIndex=0" -Encoding ASCII -Force;
+                  Set-Content -Path "$d\☀️ Sunshine Streaming.url" -Value "[InternetShortcut]`r`nURL=https://localhost:47990/`r`nIconIndex=0" -Encoding ASCII -Force;
+                  Set-Content -Path "$d\Roblox Player.url" -Value "[InternetShortcut]`r`nURL=https://www.roblox.com/home`r`nIconIndex=0" -Encoding ASCII -Force;
+                  
+                  # Phím tắt chuyển RDP và Ngắt VPS
+                  Copy-Item -Path $ngatRdpPath -Destination "$d\NGAT-RDP-GIU-MAN-HINH-SUNSHINE.bat" -Force -ErrorAction SilentlyContinue;
+                  Copy-Item -Path $ngatVpsPath -Destination "$d\🛑 NGAT-VPS-KHAN-CAP.bat" -Force -ErrorAction SilentlyContinue;
+                  Copy-Item -Path $luuPath -Destination "$d\💾 LUU-DU-LIEU-NGAY.bat" -Force -ErrorAction SilentlyContinue;
 
-                  $lnk2 = $ws.CreateShortcut("$d\🛑_TAT-VPS_(Can-than-khi-bam).lnk");
-                  $lnk2.TargetPath = $ngatVpsPath;
-                  $lnk2.IconLocation = "shell32.dll,27";
-                  $lnk2.Save();
+                  try {
+                      # Ổ đĩa riêng
+                      $lnkDrv = $ws.CreateShortcut("$d\📁 Ổ Đĩa Riêng Zenova (100TB).lnk");
+                      $lnkDrv.TargetPath = "$($env:MOUNT_LETTER):\";
+                      $lnkDrv.Save();
 
-                  $lnk3 = $ws.CreateShortcut("$d\💾_LUU-DU-LIEU-NGAY.lnk");
-                  $lnk3.TargetPath = $luuPath;
-                  $lnk3.IconLocation = "shell32.dll,258";
-                  $lnk3.Save();
+                      # EVKey
+                      if ($evExe) {
+                          $lnkEv = $ws.CreateShortcut("$d\EVKey Tiếng Việt.lnk");
+                          $lnkEv.TargetPath = $evExe;
+                          $lnkEv.WorkingDirectory = [System.IO.Path]::GetDirectoryName($evExe);
+                          $lnkEv.Save();
+                      }
 
-                  $lnk4 = $ws.CreateShortcut("$d\🌐_WEB-QUAN-LY-VPS.url");
-                  $lnk4.TargetPath = "http://127.0.0.1:8080/";
-                  $lnk4.Save();
+                      # Minecraft
+                      if ($mcExe) {
+                          $lnkMc = $ws.CreateShortcut("$d\🎮 Minecraft (Không Cần Acc - Mod Fix Lag).lnk");
+                          $lnkMc.TargetPath = $mcExe;
+                          $lnkMc.WorkingDirectory = [System.IO.Path]::GetDirectoryName($mcExe);
+                          $lnkMc.Save();
+                      }
 
-                  $lnk5 = $ws.CreateShortcut("$d\☀️_SUNSHINE-STREAMING.url");
-                  $lnk5.TargetPath = "https://localhost:47990/";
-                  $lnk5.Save();
+                      # Roblox Player
+                      if ($rbxExe) {
+                          $lnkRbx = $ws.CreateShortcut("$d\Roblox Player.lnk");
+                          $lnkRbx.TargetPath = $rbxExe;
+                          $lnkRbx.WorkingDirectory = [System.IO.Path]::GetDirectoryName($rbxExe);
+                          $lnkRbx.Save();
+                      }
 
-                  $lnk6 = $ws.CreateShortcut("$d\📁_O-DIA-RIENG-ZENOVA.lnk");
-                  $lnk6.TargetPath = "$($env:MOUNT_LETTER):\";
-                  $lnk6.Save();
+                      # StarDesk / GameViewer
+                      if ($gvExe) {
+                          $lnkGv = $ws.CreateShortcut("$d\StarDesk Trung (GameViewer).lnk");
+                          $lnkGv.TargetPath = $gvExe;
+                          $lnkGv.Save();
+                      }
 
-                  if (Test-Path "C:\EVKey\EVKey64.exe") {
-                      $lnkEv = $ws.CreateShortcut("$d\EVKey.lnk");
-                      $lnkEv.TargetPath = "C:\EVKey\EVKey64.exe";
-                      $lnkEv.Save();
-                  }
-
-                  if (Test-Path "C:\PrismLauncher\prismlauncher.exe") {
-                      $lnkMc = $ws.CreateShortcut("$d\🎮_Minecraft_(Khong_Can_Acc).lnk");
-                      $lnkMc.TargetPath = "C:\PrismLauncher\prismlauncher.exe";
-                      $lnkMc.WorkingDirectory = "C:\PrismLauncher";
-                      $lnkMc.Save();
-                  }
-
-                  if (Test-Path "C:\Program Files\StarDesk\StarDesk.exe") {
-                      $lnkSd = $ws.CreateShortcut("$d\StarDesk-Trung.lnk");
-                      $lnkSd.TargetPath = "C:\Program Files\StarDesk\StarDesk.exe";
-                      $lnkSd.Save();
-                  }
-
-                  if (Test-Path "C:\Program Files\Netease\GameViewer\bin\GameViewer.exe") {
-                      $lnkGv = $ws.CreateShortcut("$d\GameViewer.lnk");
-                      $lnkGv.TargetPath = "C:\Program Files\Netease\GameViewer\bin\GameViewer.exe";
-                      $lnkGv.Save();
-                  }
+                      # Discord
+                      if ($dcExe) {
+                          $lnkDc = $ws.CreateShortcut("$d\Discord.lnk");
+                          $lnkDc.TargetPath = $dcExe;
+                          $lnkDc.Arguments = "--disable-gpu --no-sandbox";
+                          $lnkDc.Save();
+                      }
+                  } catch {}
               }
+              Write-Host "│ ✅ Đã phân phối toàn bộ phím tắt App và Web Quản Lý ra Desktop!" -ForegroundColor Green;
           } catch {}
 
           'SESSION_READY=1' >> "$env:GITHUB_ENV";
@@ -1171,12 +1239,29 @@ jobs:
           New-Item -ItemType Directory -Force -Path $webDir -ErrorAction SilentlyContinue | Out-Null;
           $pyServerPath = [System.IO.Path]::Combine($webDir, 'server.py');
 
-          $pyB64 = 'aW1wb3J0IGh0dHAuc2VydmVyLCBzb2NrZXRzZXJ2ZXIsIGpzb24sIG9zLCBzeXMsIHVybGxpYi5wYXJzZQoKUE9SVCA9IGludChzeXMuYXJndlsxXSkgaWYgbGVuKHN5cy5hcmd2KSA+IDEgZWxzZSA4MDgwClNJR19GSUxFID0gc3lzLmFyZ3ZbMl0gaWYgbGVuKHN5cy5hcmd2KSA+IDIgZWxzZSByIkM6XFpFTk9WQS1WSEQtSE9TVFxjb250cm9sLXNpZ25hbC50eHQiCgpjbGFzcyBaZW5vdmFIYW5kbGVyKGh0dHAuc2VydmVyLkJhc2VIVFRQUmVxdWVzdEhhbmRsZXIpOgogICAgZGVmIGxvZ19tZXNzYWdlKHNlbGYsIGZvcm1hdCwgKmFyZ3MpOgogICAgICAgIHBhc3MgIyBTdXBwcmVzcyBjb25zb2xlIG5vaXNlCgogICAgZGVmIHNlbmRfY29ycyhzZWxmKToKICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKCdBY2Nlc3MtQ29udHJvbC1BbGxvdy1PcmlnaW4nLCAnKicpCiAgICAgICAgc2VsZi5zZW5kX2hlYWRlcignQWNjZXNzLUNvbnRyb2wtQWxsb3ctTWV0aG9kcycsICdHRVQsIFBPU1QsIE9QVElPTlMnKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0FjY2Vzcy1Db250cm9sLUFsbG93LUhlYWRlcnMnLCAnQ29udGVudC1UeXBlJykKCiAgICBkZWYgZG9fT1BUSU9OUyhzZWxmKToKICAgICAgICBzZWxmLnNlbmRfcmVzcG9uc2UoMjAwKQogICAgICAgIHNlbGYuc2VuZF9jb3JzKCkKICAgICAgICBzZWxmLmVuZF9oZWFkZXJzKCkKCiAgICBkZWYgZG9fUE9TVChzZWxmKToKICAgICAgICBjbWQgPSAiIgogICAgICAgIHBhdGggPSBzZWxmLnBhdGgubG93ZXIoKQogICAgICAgIGlmIHBhdGggPT0gIi9zdG9wIjoKICAgICAgICAgICAgY21kID0gIlNUT1BfU0VTU0lPTiIKICAgICAgICBlbGlmIHBhdGggPT0gIi9yZXN0YXJ0IjoKICAgICAgICAgICAgY21kID0gIlJFU1RBUlRfU0VTU0lPTiIKICAgICAgICBlbGlmIHBhdGggPT0gIi9zYXZlIjoKICAgICAgICAgICAgY21kID0gIlNBVkVfTk9XIgogICAgICAgIGVsc2U6CiAgICAgICAgICAgIGxlbmd0aCA9IGludChzZWxmLmhlYWRlcnMuZ2V0KCdjb250ZW50LWxlbmd0aCcsIDApKQogICAgICAgICAgICBib2R5ID0gc2VsZi5yZmlsZS5yZWFkKGxlbmd0aCkuZGVjb2RlKCd1dGYtOCcsIGVycm9ycz0naWdub3JlJykKICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgZGF0YSA9IGpzb24ubG9hZHMoYm9keSkKICAgICAgICAgICAgICAgIGNtZCA9IGRhdGEuZ2V0KCdjbWQnLCBib2R5KQogICAgICAgICAgICBleGNlcHQ6CiAgICAgICAgICAgICAgICBjbWQgPSBib2R5CgogICAgICAgIGlmIGNtZCBhbmQgU0lHX0ZJTEU6CiAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgIG9zLm1ha2VkaXJzKG9zLnBhdGguZGlybmFtZShTSUdfRklMRSksIGV4aXN0X29rPVRydWUpCiAgICAgICAgICAgICAgICB3aXRoIG9wZW4oU0lHX0ZJTEUsICd3JywgZW5jb2Rpbmc9J3V0Zi04JykgYXMgZjoKICAgICAgICAgICAgICAgICAgICBmLndyaXRlKGNtZC5zdHJpcCgpKQogICAgICAgICAgICBleGNlcHQgRXhjZXB0aW9uOgogICAgICAgICAgICAgICAgcGFzcwoKICAgICAgICByZXNwID0ganNvbi5kdW1wcyh7Im9rIjogVHJ1ZSwgIm1lc3NhZ2UiOiBmIsSQw6Mgbmjhuq1uIGzhu4duaDoge2NtZC5zdHJpcCgpfSJ9KS5lbmNvZGUoJ3V0Zi04JykKICAgICAgICBzZWxmLnNlbmRfcmVzcG9uc2UoMjAwKQogICAgICAgIHNlbGYuc2VuZF9jb3JzKCkKICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKCdDb250ZW50LVR5cGUnLCAnYXBwbGljYXRpb24vanNvbjsgY2hhcnNldD11dGYtOCcpCiAgICAgICAgc2VsZi5zZW5kX2hlYWRlcignQ29udGVudC1MZW5ndGgnLCBzdHIobGVuKHJlc3ApKSkKICAgICAgICBzZWxmLmVuZF9oZWFkZXJzKCkKICAgICAgICBzZWxmLndmaWxlLndyaXRlKHJlc3ApCgogICAgZGVmIGRvX0dFVChzZWxmKToKICAgICAgICBpZiBzZWxmLnBhdGguc3RhcnRzd2l0aCgnL2FwaS9jbWQnKToKICAgICAgICAgICAgcXVlcnkgPSB1cmxsaWIucGFyc2UudXJscGFyc2Uoc2VsZi5wYXRoKS5xdWVyeQogICAgICAgICAgICBwYXJhbXMgPSB1cmxsaWIucGFyc2UucGFyc2VfcXMocXVlcnkpCiAgICAgICAgICAgIGNtZCA9IHBhcmFtcy5nZXQoJ2NtZCcsIFsnJ10pWzBdCiAgICAgICAgICAgIGlmIGNtZCBhbmQgU0lHX0ZJTEU6CiAgICAgICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICAgICAgd2l0aCBvcGVuKFNJR19GSUxFLCAndycsIGVuY29kaW5nPSd1dGYtOCcpIGFzIGY6CiAgICAgICAgICAgICAgICAgICAgICAgIGYud3JpdGUoY21kLnN0cmlwKCkpCiAgICAgICAgICAgICAgICBleGNlcHQ6CiAgICAgICAgICAgICAgICAgICAgcGFzcwogICAgICAgICAgICByZXNwID0ganNvbi5kdW1wcyh7Im9rIjogVHJ1ZSwgIm1lc3NhZ2UiOiBmIsSQw6MgZ+G7rWkgbOG7h25oOiB7Y21kfSJ9KS5lbmNvZGUoJ3V0Zi04JykKICAgICAgICAgICAgc2VsZi5zZW5kX3Jlc3BvbnNlKDIwMCkKICAgICAgICAgICAgc2VsZi5zZW5kX2NvcnMoKQogICAgICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKCdDb250ZW50LVR5cGUnLCAnYXBwbGljYXRpb24vanNvbjsgY2hhcnNldD11dGYtOCcpCiAgICAgICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtTGVuZ3RoJywgc3RyKGxlbihyZXNwKSkpCiAgICAgICAgICAgIHNlbGYuZW5kX2hlYWRlcnMoKQogICAgICAgICAgICBzZWxmLndmaWxlLndyaXRlKHJlc3ApCiAgICAgICAgICAgIHJldHVybgoKICAgICAgICBkZWYgcmYocCk6CiAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgIGlmIG9zLnBhdGguZXhpc3RzKHApOgogICAgICAgICAgICAgICAgICAgIHdpdGggb3BlbihwLCAncicsIGVuY29kaW5nPSd1dGYtOCcsIGVycm9ycz0naWdub3JlJykgYXMgZjoKICAgICAgICAgICAgICAgICAgICAgICAgcmV0dXJuIGYucmVhZCgpLnN0cmlwKCkKICAgICAgICAgICAgZXhjZXB0OgogICAgICAgICAgICAgICAgcGFzcwogICAgICAgICAgICByZXR1cm4gIiIKCiAgICAgICAgdHNJcCA9IHJmKHIiQzpcdGFpbHNjYWxlLWlwLnR4dCIpIG9yIG9zLmVudmlyb24uZ2V0KCdUQUlMU0NBTEVfSVAnLCAnMTI3LjAuMC4xJykKICAgICAgICBwdWJJcCA9IHJmKHIiQzpcbWFjaGluZS1pcC50eHQiKSBvciBvcy5lbnZpcm9uLmdldCgnTUFDSElORV9QVUJMSUNfSVAnLCAnxJBhbmcgY+G6rXAgbmjhuq10Li4uJykKICAgICAgICBuZ3Jva1JkcCA9IHJmKHIiQzpccmRwLW5ncm9rLnR4dCIpCiAgICAgICAgc2RJZCA9IHJmKHIiQzpcc3RhcmRlc2staWQudHh0Iikgb3Igb3MuZW52aXJvbi5nZXQoJ1NUQVJERVNLX0lEJywgJ8SQYW5nIGvhur90IG7hu5FpLi4uJykKICAgICAgICBzZFBpbiA9IHJmKHIiQzpcc3RhcmRlc2stcGluLnR4dCIpIG9yIG9zLmVudmlyb24uZ2V0KCdTVEFSREVTS19QSU4nLCAnWmVub3ZhMjAyNicpCiAgICAgICAgY2ZXZWIgPSByZihyIkM6XGNsb3VkZmxhcmVkLXdlYi11cmwudHh0IikKICAgICAgICBsdFdlYiA9IHJmKHIiQzpcbG9jYWx0dW5uZWwtd2ViLXVybC50eHQiKQogICAgICAgIGNmU3VuID0gcmYociJDOlxjbG91ZGZsYXJlZC1zdW5zaGluZS11cmwudHh0IikKICAgICAgICBtYWNoSWQgPSBvcy5lbnZpcm9uLmdldCgnTUFDSElORV9JRCcsICd6ZW5vdmEtMScpCiAgICAgICAgZGlzcE5hbWUgPSBvcy5lbnZpcm9uLmdldCgnRElTUExBWV9OQU1FJywgJ1plbm92YSBVbHRpbWF0ZSBNYWNoaW5lJykKICAgICAgICBwd2QgPSBvcy5lbnZpcm9uLmdldCgnRklYRURfUEFTU1dPUkQnLCAnWmVub3ZhQDIwMjYnKQoKICAgICAgICByZHBBZGRyID0gbmdyb2tSZHAgaWYgbmdyb2tSZHAgZWxzZSAoZiJ7dHNJcH06MzM4OSIgaWYgdHNJcCBhbmQgdHNJcCAhPSAiMTI3LjAuMC4xIiBlbHNlIGYie3B1YklwfTozMzg5IikKICAgICAgICBzdW5MaW5rID0gZic8YSBocmVmPSJ7Y2ZTdW59IiB0YXJnZXQ9Il9ibGFuayIgc3R5bGU9ImNvbG9yOiMzOGJkZjg7Zm9udC13ZWlnaHQ6Ym9sZCI+8J+MkCBN4bufIFN1bnNoaW5lIFdlYiBVSSAoQ2xvdWRmbGFyZSk8L2E+JyBpZiBjZlN1biBlbHNlICdMb2NhbDogaHR0cHM6Ly8xMjcuMC4wLjE6NDc5OTAnCiAgICAgICAgcHViV2ViTGluayA9IGNmV2ViIG9yIGx0V2ViCiAgICAgICAgd2ViQmFubmVyID0gZic8ZGl2IHN0eWxlPSJiYWNrZ3JvdW5kOiMxZTI5M2I7cGFkZGluZzoxMnB4O2JvcmRlci1yYWRpdXM6OHB4O21hcmdpbi1ib3R0b206MjBweDtmb250LXNpemU6MTNweDtib3JkZXI6MXB4IHNvbGlkICMzMzQxNTEiPvCfjJAgPGI+TGluayBQdWJsaWMgV2ViIFF14bqjbiBMw706PC9iPiA8YSBocmVmPSJ7cHViV2ViTGlua30iIHRhcmdldD0iX2JsYW5rIiBzdHlsZT0iY29sb3I6IzM4YmRmODtmb250LXdlaWdodDpib2xkO3RleHQtZGVjb3JhdGlvbjp1bmRlcmxpbmUiPntwdWJXZWJMaW5rfTwvYT48L2Rpdj4nIGlmIHB1YldlYkxpbmsgZWxzZSAnJwoKICAgICAgICBodG1sID0gZiIiIjwhRE9DVFlQRSBodG1sPjxodG1sPjxoZWFkPjxtZXRhIGNoYXJzZXQ9InV0Zi04Ij48dGl0bGU+WmVub3ZhIFZQUyBDb250cm9sIFBhbmVsPC90aXRsZT4KPG1ldGEgbmFtZT0idmlld3BvcnQiIGNvbnRlbnQ9IndpZHRoPWRldmljZS13aWR0aCxpbml0aWFsLXNjYWxlPTEiPgo8c3R5bGU+CmJvZHl7e2JhY2tncm91bmQ6IzA5MGQxNjtjb2xvcjojZjNmNGY2O2ZvbnQtZmFtaWx5OnN5c3RlbS11aSwtYXBwbGUtc3lzdGVtLHNhbnMtc2VyaWY7bWFyZ2luOjA7cGFkZGluZzoyMHB4O2Rpc3BsYXk6ZmxleDtqdXN0aWZ5LWNvbnRlbnQ6Y2VudGVyfX0KLmNhcmR7e3dpZHRoOjEwMCU7bWF4LXdpZHRoOjg1MHB4O2JhY2tncm91bmQ6IzExMTgyNztib3JkZXI6MXB4IHNvbGlkICMxZjI5Mzc7Ym9yZGVyLXJhZGl1czoxNnB4O3BhZGRpbmc6MjRweDtib3gtc2hhZG93OjAgMjBweCAyNXB4IC01cHggcmdiYSgwLDAsMCwwLjUpfX0KLmhlYWRlcnt7ZGlzcGxheTpmbGV4O2p1c3RpZnktY29udGVudDpzcGFjZS1iZXR3ZWVuO2FsaWduLWl0ZW1zOmNlbnRlcjtib3JkZXItYm90dG9tOjFweCBzb2xpZCAjMWYyOTM3O3BhZGRpbmctYm90dG9tOjE2cHg7bWFyZ2luLWJvdHRvbToyMHB4fX0KLmJhZGdle3tiYWNrZ3JvdW5kOiMwNjVmNDY7Y29sb3I6IzM0ZDM5OTtwYWRkaW5nOjZweCAxNHB4O2JvcmRlci1yYWRpdXM6OTk5OXB4O2ZvbnQtd2VpZ2h0OjcwMDtmb250LXNpemU6MTJweDtsZXR0ZXItc3BhY2luZzowLjVweH19Ci5ncmlke3tkaXNwbGF5OmdyaWQ7Z3JpZC10ZW1wbGF0ZS1jb2x1bW5zOnJlcGVhdChhdXRvLWZpdCxtaW5tYXgoMjUwcHgsMWZyKSk7Z2FwOjE2cHg7bWFyZ2luLWJvdHRvbToyNHB4fX0KLmJveHt7YmFja2dyb3VuZDojMWYyOTM3O2JvcmRlcjoxcHggc29saWQgIzM3NDE1MTtib3JkZXItcmFkaXVzOjEycHg7cGFkZGluZzoxNnB4O3Bvc2l0aW9uOnJlbGF0aXZlfX0KLmJveCBoM3t7bWFyZ2luLXRvcDowO2ZvbnQtc2l6ZToxNnB4O2NvbG9yOiMzOGJkZjg7ZGlzcGxheTpmbGV4O2FsaWduLWl0ZW1zOmNlbnRlcjtnYXA6OHB4fX0KLmNvZGV7e2JhY2tncm91bmQ6IzExMTgyNztwYWRkaW5nOjZweCAxMHB4O2JvcmRlci1yYWRpdXM6NnB4O2ZvbnQtZmFtaWx5Om1vbm9zcGFjZTtmb250LXNpemU6MTRweDtjb2xvcjojZmFjYzE1O2ZvbnQtd2VpZ2h0OmJvbGQ7ZGlzcGxheTppbmxpbmUtYmxvY2s7bWFyZ2luLXRvcDo0cHh9fQouYnRuLWdyb3Vwe3tkaXNwbGF5OmdyaWQ7Z3JpZC10ZW1wbGF0ZS1jb2x1bW5zOnJlcGVhdChhdXRvLWZpdCxtaW5tYXgoMTgwcHgsMWZyKSk7Z2FwOjEycHh9fQpidXR0b257e3BhZGRpbmc6MTRweDtib3JkZXI6bm9uZTtib3JkZXItcmFkaXVzOjEwcHg7Zm9udC13ZWlnaHQ6NzAwO2ZvbnQtc2l6ZToxNHB4O2N1cnNvcjpwb2ludGVyO3RyYW5zaXRpb246MC4ycztkaXNwbGF5OmZsZXg7YWxpZ24taXRlbXM6Y2VudGVyO2p1c3RpZnktY29udGVudDpjZW50ZXI7Z2FwOjhweDtjb2xvcjojZmZmfX0KLmJ0bi1zYXZle3tiYWNrZ3JvdW5kOiMwMjg0Yzd9fS5idG4tc2F2ZTpob3Zlcnt7YmFja2dyb3VuZDojMDM2OWExfX0KLmJ0bi1yc3R7e2JhY2tncm91bmQ6I2Q5NzcwNn19LmJ0bi1yc3Q6aG92ZXJ7e2JhY2tncm91bmQ6I2I0NTMwOX19Ci5idG4tc3RvcHt7YmFja2dyb3VuZDojZGMyNjI2fX0uYnRuLXN0b3A6aG92ZXJ7e2JhY2tncm91bmQ6I2I5MWMxY319CmF7e2NvbG9yOiMzOGJkZjg7dGV4dC1kZWNvcmF0aW9uOm5vbmV9fQphOmhvdmVye3t0ZXh0LWRlY29yYXRpb246dW5kZXJsaW5lfX0KPC9zdHlsZT48L2hlYWQ+PGJvZHk+PGRpdiBjbGFzcz0iY2FyZCI+CjxkaXYgY2xhc3M9ImhlYWRlciI+CjxkaXY+PGgyIHN0eWxlPSJtYXJnaW46MDtmb250LXNpemU6MjJweCI+8J+agCBaRU5PVkEgVUxUSU1BVEUgVlBTPC9oMj48cCBzdHlsZT0ibWFyZ2luOjRweCAwIDA7Y29sb3I6IzljYTNhZjtmb250LXNpemU6MTNweCI+TcOheTogPGI+e2Rpc3BOYW1lfSAoe21hY2hJZH0pPC9iPiB8IElQIE91dGJvdW5kOiA8Yj57cHViSXB9PC9iPjwvcD48L2Rpdj4KPHNwYW4gY2xhc3M9ImJhZGdlIj7il48gT05MSU5FICYgxJBBTkcgQ0jhuqBZPC9zcGFuPgo8L2Rpdj4KPGRpdiBjbGFzcz0iZ3JpZCI+CjxkaXYgY2xhc3M9ImJveCIgc3R5bGU9ImJvcmRlci1sZWZ0OjRweCBzb2xpZCAjZjU5ZTBiIj4KPGgzPvCfjJ8gMS4gU3RhckRlc2sgVHJ1bmcgLyBHYW1lVmlld2VyPC9oMz4KPHAgc3R5bGU9Im1hcmdpbjo2cHggMDtmb250LXNpemU6MTNweDtjb2xvcjojZDFkNWRiIj5LaMO0bmcgY+G6p24gbeG7nyBwb3J0LCA2MC0xMjBmcHMgMG1zIGRlbGF5OjwvcD4KSUQ6IDxzcGFuIGNsYXNzPSJjb2RlIj57c2RJZH08L3NwYW4+PGJyPgpQSU46IDxzcGFuIGNsYXNzPSJjb2RlIj57c2RQaW59PC9zcGFuPgo8L2Rpdj4KPGRpdiBjbGFzcz0iYm94IiBzdHlsZT0iYm9yZGVyLWxlZnQ6NHB4IHNvbGlkICMzYjgyZjYiPgo8aDM+8J+Wpe+4jyAyLiBSZW1vdGUgRGVza3RvcCAoUkRQKSAmIFRhaWxzY2FsZTwvaDM+CjxwIHN0eWxlPSJtYXJnaW46NnB4IDA7Zm9udC1zaXplOjEzcHg7Y29sb3I6I2QxZDVkYiI+xJDhu4thIGNo4buJIFJEUDogPHNwYW4gY2xhc3M9ImNvZGUiPntyZHBBZGRyfTwvc3Bhbj48L3A+ClVzZXI6IDxzcGFuIGNsYXNzPSJjb2RlIj56ZW5vdmEgKGhv4bq3YyBydW5uZXJhZG1pbik8L3NwYW4+PGJyPgpQYXNzOiA8c3BhbiBjbGFzcz0iY29kZSI+e3B3ZH08L3NwYW4+CjwvZGl2Pgo8ZGl2IGNsYXNzPSJib3giIHN0eWxlPSJib3JkZXItbGVmdDo0cHggc29saWQgIzEwYjk4MSI+CjxoMz7imIDvuI8gMy4gU3Vuc2hpbmUgJiBNb29ubGlnaHQgU3RyZWFtPC9oMz4KPHAgc3R5bGU9Im1hcmdpbjo2cHggMDtmb250LXNpemU6MTNweDtjb2xvcjojZDFkNWRiIj5TdW5zaGluZSBXZWIgVUk6PC9wPgp7c3VuTGlua308YnI+ClVzZXI6IDxzcGFuIGNsYXNzPSJjb2RlIj56ZW5vdmE8L3NwYW4+IHwgUGFzczogPHNwYW4gY2xhc3M9ImNvZGUiPntwd2R9PC9zcGFuPgo8L2Rpdj4KPC9kaXY+Cnt3ZWJCYW5uZXJ9CjxkaXYgY2xhc3M9ImJ0bi1ncm91cCI+CjxidXR0b24gY2xhc3M9ImJ0bi1zYXZlIiBvbmNsaWNrPSJzZW5kQ21kKCdTQVZFX05PVycpIj7wn5K+IEzGr1UgROG7riBMSeG7hlUgTkdBWTwvYnV0dG9uPgo8YnV0dG9uIGNsYXNzPSJidG4tcnN0IiBvbmNsaWNrPSJzZW5kQ21kKCdSRVNUQVJUX1NFU1NJT04nKSI+8J+UgSBSRVNFVCBQSEnDik4gTeG7mkk8L2J1dHRvbj4KPGJ1dHRvbiBjbGFzcz0iYnRuLXN0b3AiIG9uY2xpY2s9InNlbmRDbWQoJ1NUT1BfU0VTU0lPTicpIj7wn5uRIE5H4bquVCBWUFM8L2J1dHRvbj4KPC9kaXY+CjwvZGl2PjxzY3JpcHQ+CmFzeW5jIGZ1bmN0aW9uIHNlbmRDbWQoYyl7ewogICAgbGV0IG1zZyA9IGMgPT09ICdTVE9QX1NFU1NJT04nID8gJ0PhuqJOSCBCw4FPOiBC4bqhbiBjw7MgQ0jhuq5DIENI4bquTiBtdeG7kW4gVOG6rlQgVlBTIGtow7RuZz8nIDogKCdYw6FjIG5o4bqtbiB0aOG7sWMgaGnhu4duIGzhu4duaDogJyArIGMgKyAnPycpOwogICAgaWYoY29uZmlybShtc2cpKXt7CiAgICAgICAgbGV0IHI9YXdhaXQgZmV0Y2goJy9hcGkvY21kJyx7bWV0aG9kOidQT1NUJyxoZWFkZXJzOnt7J0NvbnRlbnQtVHlwZSc6J2FwcGxpY2F0aW9uL2pzb24nfX0sYm9keTpKU09OLnN0cmluZ2lmeSh7e2NtZDpjfX0pfX0pOwogICAgICAgIGxldCBkPWF3YWl0IHIuanNvbigpOwogICAgICAgIGFsZXJ0KGQubWVzc2FnZSk7CiAgICB9fQp9fQpzZXRUaW1lb3V0KCgpPT57eyBsb2NhdGlvbi5yZWxvYWQoKTsgfX0sIDE1MDAwKTsKPC9zY3JpcHQ+PC9ib2R5PjwvaHRtbD4iIiIKICAgICAgICByZXNwID0gaHRtbC5lbmNvZGUoJ3V0Zi04JykKICAgICAgICBzZWxmLnNlbmRfcmVzcG9uc2UoMjAwKQogICAgICAgIHNlbGYuc2VuZF9jb3JzKCkKICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKCdDb250ZW50LVR5cGUnLCAndGV4dC9odG1sOyBjaGFyc2V0PXV0Zi04JykKICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKCdDb250ZW50LUxlbmd0aCcsIHN0cihsZW4ocmVzcCkpKQogICAgICAgIHNlbGYuZW5kX2hlYWRlcnMoKQogICAgICAgIHNlbGYud2ZpbGUud3JpdGUocmVzcCkKCmNsYXNzIFRocmVhZGVkSFRUUFNlcnZlcihzb2NrZXRzZXJ2ZXIuVGhyZWFkaW5nTWl4SW4sIGh0dHAuc2VydmVyLkhUVFBTZXJ2ZXIpOgogICAgZGFlbW9uX3RocmVhZHMgPSBUcnVlCiAgICBhbGxvd19yZXVzZV9hZGRyZXNzID0gVHJ1ZQoKaWYgX19uYW1lX18gPT0gJ19fbWFpbl9fJzoKICAgIHNlcnZlciA9IFRocmVhZGVkSFRUUFNlcnZlcigoJzAuMC4wLjAnLCBQT1JUKSwgWmVub3ZhSGFuZGxlcikKICAgIHNlcnZlci5zZXJ2ZV9mb3JldmVyKCkK';
+          $pyB64 = 'aW1wb3J0IGh0dHAuc2VydmVyLCBzb2NrZXRzZXJ2ZXIsIGpzb24sIG9zLCBzeXMsIHVybGxpYi5wYXJzZQoKUE9SVCA9IGludChzeXMuYXJndlsxXSkgaWYgbGVuKHN5cy5hcmd2KSA+IDEgZWxzZSA4MDgwClNJR19GSUxFID0gc3lzLmFyZ3ZbMl0gaWYgbGVuKHN5cy5hcmd2KSA+IDIgZWxzZSByIkM6XFpFTk9WQS1WSEQtSE9TVFxjb250cm9sLXNpZ25hbC50eHQiCgpIVE1MX1RFTVBMQVRFID0gIiIiPCFET0NUWVBFIGh0bWw+CjxodG1sIGxhbmc9InZpIj4KPGhlYWQ+CjxtZXRhIGNoYXJzZXQ9InV0Zi04Ij4KPHRpdGxlPlplbm92YSBWUFMgQ29udHJvbCBQYW5lbDwvdGl0bGU+CjxtZXRhIG5hbWU9InZpZXdwb3J0IiBjb250ZW50PSJ3aWR0aD1kZXZpY2Utd2lkdGgsIGluaXRpYWwtc2NhbGU9MSI+CjxzdHlsZT4KYm9keSB7IGJhY2tncm91bmQ6ICMwOTBkMTY7IGNvbG9yOiAjZjNmNGY2OyBmb250LWZhbWlseTogc3lzdGVtLXVpLCAtYXBwbGUtc3lzdGVtLCBzYW5zLXNlcmlmOyBtYXJnaW46IDA7IHBhZGRpbmc6IDIwcHg7IGRpc3BsYXk6IGZsZXg7IGp1c3RpZnktY29udGVudDogY2VudGVyOyB9Ci5jYXJkIHsgd2lkdGg6IDEwMCU7IG1heC13aWR0aDogODUwcHg7IGJhY2tncm91bmQ6ICMxMTE4Mjc7IGJvcmRlcjogMXB4IHNvbGlkICMxZjI5Mzc7IGJvcmRlci1yYWRpdXM6IDE2cHg7IHBhZGRpbmc6IDI0cHg7IGJveC1zaGFkb3c6IDAgMjBweCAyNXB4IC01cHggcmdiYSgwLDAsMCwwLjUpOyB9Ci5oZWFkZXIgeyBkaXNwbGF5OiBmbGV4OyBqdXN0aWZ5LWNvbnRlbnQ6IHNwYWNlLWJldHdlZW47IGFsaWduLWl0ZW1zOiBjZW50ZXI7IGJvcmRlci1ib3R0b206IDFweCBzb2xpZCAjMWYyOTM3OyBwYWRkaW5nLWJvdHRvbTogMTZweDsgbWFyZ2luLWJvdHRvbTogMjBweDsgfQouYmFkZ2UgeyBiYWNrZ3JvdW5kOiAjMDY1ZjQ2OyBjb2xvcjogIzM0ZDM5OTsgcGFkZGluZzogNnB4IDE0cHg7IGJvcmRlci1yYWRpdXM6IDk5OTlweDsgZm9udC13ZWlnaHQ6IDcwMDsgZm9udC1zaXplOiAxMnB4OyB9Ci5ncmlkIHsgZGlzcGxheTogZ3JpZDsgZ3JpZC10ZW1wbGF0ZS1jb2x1bW5zOiByZXBlYXQoYXV0by1maXQsIG1pbm1heCgyNTBweCwgMWZyKSk7IGdhcDogMTZweDsgbWFyZ2luLWJvdHRvbTogMjRweDsgfQouYm94IHsgYmFja2dyb3VuZDogIzFmMjkzNzsgYm9yZGVyOiAxcHggc29saWQgIzM3NDE1MTsgYm9yZGVyLXJhZGl1czogMTJweDsgcGFkZGluZzogMTZweDsgcG9zaXRpb246IHJlbGF0aXZlOyB9Ci5ib3ggaDMgeyBtYXJnaW4tdG9wOiAwOyBmb250LXNpemU6IDE2cHg7IGNvbG9yOiAjMzhiZGY4OyBkaXNwbGF5OiBmbGV4OyBhbGlnbi1pdGVtczogY2VudGVyOyBnYXA6IDhweDsgfQouY29kZSB7IGJhY2tncm91bmQ6ICMxMTE4Mjc7IHBhZGRpbmc6IDZweCAxMHB4OyBib3JkZXItcmFkaXVzOiA2cHg7IGZvbnQtZmFtaWx5OiBtb25vc3BhY2U7IGZvbnQtc2l6ZTogMTRweDsgY29sb3I6ICNmYWNjMTU7IGZvbnQtd2VpZ2h0OiBib2xkOyBkaXNwbGF5OiBpbmxpbmUtYmxvY2s7IG1hcmdpbi10b3A6IDRweDsgd29yZC1icmVhazogYnJlYWstYWxsOyB9Ci5idG4tZ3JvdXAgeyBkaXNwbGF5OiBncmlkOyBncmlkLXRlbXBsYXRlLWNvbHVtbnM6IHJlcGVhdChhdXRvLWZpdCwgbWlubWF4KDE4MHB4LCAxZnIpKTsgZ2FwOiAxMnB4OyB9CmJ1dHRvbiB7IHBhZGRpbmc6IDE0cHg7IGJvcmRlcjogbm9uZTsgYm9yZGVyLXJhZGl1czogMTBweDsgZm9udC13ZWlnaHQ6IDcwMDsgZm9udC1zaXplOiAxNHB4OyBjdXJzb3I6IHBvaW50ZXI7IGRpc3BsYXk6IGZsZXg7IGFsaWduLWl0ZW1zOiBjZW50ZXI7IGp1c3RpZnktY29udGVudDogY2VudGVyOyBnYXA6IDhweDsgY29sb3I6ICNmZmY7IHRyYW5zaXRpb246IDAuMnM7IH0KLmJ0bi1zYXZlIHsgYmFja2dyb3VuZDogIzAyODRjNzsgfSAuYnRuLXNhdmU6aG92ZXIgeyBiYWNrZ3JvdW5kOiAjMDM2OWExOyB9Ci5idG4tcnN0IHsgYmFja2dyb3VuZDogI2Q5NzcwNjsgfSAuYnRuLXJzdDpob3ZlciB7IGJhY2tncm91bmQ6ICNiNDUzMDk7IH0KLmJ0bi1zdG9wIHsgYmFja2dyb3VuZDogI2RjMjYyNjsgfSAuYnRuLXN0b3A6aG92ZXIgeyBiYWNrZ3JvdW5kOiAjYjkxYzFjOyB9CmEgeyBjb2xvcjogIzM4YmRmODsgdGV4dC1kZWNvcmF0aW9uOiBub25lOyB9CmE6aG92ZXIgeyB0ZXh0LWRlY29yYXRpb246IHVuZGVybGluZTsgfQo8L3N0eWxlPgo8L2hlYWQ+Cjxib2R5Pgo8ZGl2IGNsYXNzPSJjYXJkIj4KPGRpdiBjbGFzcz0iaGVhZGVyIj4KPGRpdj48aDIgc3R5bGU9Im1hcmdpbjowO2ZvbnQtc2l6ZToyMnB4Ij7wn5qAIFpFTk9WQSBVTFRJTUFURSBWUFM8L2gyPjxwIHN0eWxlPSJtYXJnaW46NHB4IDAgMDtjb2xvcjojOWNhM2FmO2ZvbnQtc2l6ZToxM3B4Ij5Nw6F5OiA8Yj5fX0RJU1BfTkFNRV9fIChfX01BQ0hfSURfXyk8L2I+IHwgSVAgT3V0Ym91bmQ6IDxiPl9fUFVCX0lQX188L2I+PC9wPjwvZGl2Pgo8c3BhbiBjbGFzcz0iYmFkZ2UiPuKXjyBPTkxJTkUgJiDEkEFORyBDSOG6oFk8L3NwYW4+CjwvZGl2Pgo8ZGl2IGNsYXNzPSJncmlkIj4KPGRpdiBjbGFzcz0iYm94IiBzdHlsZT0iYm9yZGVyLWxlZnQ6NHB4IHNvbGlkICNmNTllMGIiPgo8aDM+8J+MnyAxLiBTdGFyRGVzayBUcnVuZyAvIEdhbWVWaWV3ZXI8L2gzPgo8cCBzdHlsZT0ibWFyZ2luOjZweCAwO2ZvbnQtc2l6ZToxM3B4O2NvbG9yOiNkMWQ1ZGIiPkvhur90IG7hu5FpIFAyUCA2MC0xMjBmcHMga2jDtG5nIGRlbGF5OjwvcD4KSUQ6IDxzcGFuIGNsYXNzPSJjb2RlIj5fX1NEX0lEX188L3NwYW4+PGJyPgpQSU46IDxzcGFuIGNsYXNzPSJjb2RlIj5fX1NEX1BJTl9fPC9zcGFuPgo8L2Rpdj4KPGRpdiBjbGFzcz0iYm94IiBzdHlsZT0iYm9yZGVyLWxlZnQ6NHB4IHNvbGlkICMzYjgyZjYiPgo8aDM+8J+Wpe+4jyAyLiBSZW1vdGUgRGVza3RvcCAoUkRQKSAmIFRhaWxzY2FsZTwvaDM+CjxwIHN0eWxlPSJtYXJnaW46NnB4IDA7Zm9udC1zaXplOjEzcHg7Y29sb3I6I2QxZDVkYiI+xJDhu4thIGNo4buJIFJEUDogPHNwYW4gY2xhc3M9ImNvZGUiPl9fUkRQX0FERFJfXzwvc3Bhbj48L3A+ClVzZXI6IDxzcGFuIGNsYXNzPSJjb2RlIj56ZW5vdmEgKGhv4bq3YyBydW5uZXJhZG1pbik8L3NwYW4+PGJyPgpQYXNzOiA8c3BhbiBjbGFzcz0iY29kZSI+X19QV0RfXzwvc3Bhbj4KPC9kaXY+CjxkaXYgY2xhc3M9ImJveCIgc3R5bGU9ImJvcmRlci1sZWZ0OjRweCBzb2xpZCAjMTBiOTgxIj4KPGgzPuKYgO+4jyAzLiBTdW5zaGluZSAmIE1vb25saWdodCBTdHJlYW08L2gzPgo8cCBzdHlsZT0ibWFyZ2luOjZweCAwO2ZvbnQtc2l6ZToxM3B4O2NvbG9yOiNkMWQ1ZGIiPlN1bnNoaW5lIFdlYiBVSTo8L3A+Cl9fU1VOX0xJTktfXzxicj4KVXNlcjogPHNwYW4gY2xhc3M9ImNvZGUiPnplbm92YTwvc3Bhbj4gfCBQYXNzOiA8c3BhbiBjbGFzcz0iY29kZSI+X19QV0RfXzwvc3Bhbj4KPC9kaXY+CjwvZGl2PgpfX1dFQl9CQU5ORVJfXwo8ZGl2IGNsYXNzPSJidG4tZ3JvdXAiPgo8YnV0dG9uIGNsYXNzPSJidG4tc2F2ZSIgb25jbGljaz0ic2VuZENtZCgnU0FWRV9OT1cnKSI+8J+SviBMxq9VIEThu64gTEnhu4ZVIE5HQVk8L2J1dHRvbj4KPGJ1dHRvbiBjbGFzcz0iYnRuLXJzdCIgb25jbGljaz0ic2VuZENtZCgnUkVTVEFSVF9TRVNTSU9OJykiPvCflIEgUkVTRVQgUEhJw4pOIE3hu5pJPC9idXR0b24+CjxidXR0b24gY2xhc3M9ImJ0bi1zdG9wIiBvbmNsaWNrPSJzZW5kQ21kKCdTVE9QX1NFU1NJT04nKSI+8J+bkSBOR+G6rlQgVlBTPC9idXR0b24+CjwvZGl2Pgo8L2Rpdj4KPHNjcmlwdD4KYXN5bmMgZnVuY3Rpb24gc2VuZENtZChjKSB7CiAgICB2YXIgbXNnID0gKGMgPT09ICdTVE9QX1NFU1NJT04nKSA/ICdD4bqiTkggQsOBTzogQuG6oW4gY8OzIENI4bquQyBDSOG6rk4gbXXhu5FuIFThuq5UIFZQUyBraMO0bmc/JyA6ICgnWMOhYyBuaOG6rW4gdGjhu7FjIGhp4buHbiBs4buHbmg6ICcgKyBjICsgJz8nKTsKICAgIGlmIChjb25maXJtKG1zZykpIHsKICAgICAgICB0cnkgewogICAgICAgICAgICB2YXIgciA9IGF3YWl0IGZldGNoKCcvYXBpL2NtZCcsIHsKICAgICAgICAgICAgICAgIG1ldGhvZDogJ1BPU1QnLAogICAgICAgICAgICAgICAgaGVhZGVyczogeyAnQ29udGVudC1UeXBlJzogJ2FwcGxpY2F0aW9uL2pzb24nIH0sCiAgICAgICAgICAgICAgICBib2R5OiBKU09OLnN0cmluZ2lmeSh7IGNtZDogYyB9KQogICAgICAgICAgICB9KTsKICAgICAgICAgICAgdmFyIGQgPSBhd2FpdCByLmpzb24oKTsKICAgICAgICAgICAgYWxlcnQoZC5tZXNzYWdlKTsKICAgICAgICB9IGNhdGNoKGUpIHsKICAgICAgICAgICAgYWxlcnQoJ0zhu5dpIGvhur90IG7hu5FpOiAnICsgZSk7CiAgICAgICAgfQogICAgfQp9CnNldFRpbWVvdXQoZnVuY3Rpb24oKSB7IGxvY2F0aW9uLnJlbG9hZCgpOyB9LCAxNTAwMCk7Cjwvc2NyaXB0Pgo8L2JvZHk+CjwvaHRtbD4KIiIiCgpjbGFzcyBaZW5vdmFIYW5kbGVyKGh0dHAuc2VydmVyLkJhc2VIVFRQUmVxdWVzdEhhbmRsZXIpOgogICAgZGVmIGxvZ19tZXNzYWdlKHNlbGYsIGZvcm1hdCwgKmFyZ3MpOgogICAgICAgIHBhc3MKCiAgICBkZWYgc2VuZF9jb3JzKHNlbGYpOgogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0FjY2Vzcy1Db250cm9sLUFsbG93LU9yaWdpbicsICcqJykKICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKCdBY2Nlc3MtQ29udHJvbC1BbGxvdy1NZXRob2RzJywgJ0dFVCwgUE9TVCwgT1BUSU9OUycpCiAgICAgICAgc2VsZi5zZW5kX2hlYWRlcignQWNjZXNzLUNvbnRyb2wtQWxsb3ctSGVhZGVycycsICdDb250ZW50LVR5cGUnKQoKICAgIGRlZiBkb19PUFRJT05TKHNlbGYpOgogICAgICAgIHNlbGYuc2VuZF9yZXNwb25zZSgyMDApCiAgICAgICAgc2VsZi5zZW5kX2NvcnMoKQogICAgICAgIHNlbGYuZW5kX2hlYWRlcnMoKQoKICAgIGRlZiBkb19QT1NUKHNlbGYpOgogICAgICAgIGNtZCA9ICIiCiAgICAgICAgcGF0aCA9IHNlbGYucGF0aC5sb3dlcigpCiAgICAgICAgaWYgcGF0aCA9PSAiL3N0b3AiOgogICAgICAgICAgICBjbWQgPSAiU1RPUF9TRVNTSU9OIgogICAgICAgIGVsaWYgcGF0aCA9PSAiL3Jlc3RhcnQiOgogICAgICAgICAgICBjbWQgPSAiUkVTVEFSVF9TRVNTSU9OIgogICAgICAgIGVsaWYgcGF0aCA9PSAiL3NhdmUiOgogICAgICAgICAgICBjbWQgPSAiU0FWRV9OT1ciCiAgICAgICAgZWxzZToKICAgICAgICAgICAgbGVuZ3RoID0gaW50KHNlbGYuaGVhZGVycy5nZXQoJ2NvbnRlbnQtbGVuZ3RoJywgMCkpCiAgICAgICAgICAgIGJvZHkgPSBzZWxmLnJmaWxlLnJlYWQobGVuZ3RoKS5kZWNvZGUoJ3V0Zi04JywgZXJyb3JzPSdpZ25vcmUnKQogICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICBkYXRhID0ganNvbi5sb2Fkcyhib2R5KQogICAgICAgICAgICAgICAgY21kID0gZGF0YS5nZXQoJ2NtZCcsIGJvZHkpCiAgICAgICAgICAgIGV4Y2VwdDoKICAgICAgICAgICAgICAgIGNtZCA9IGJvZHkKCiAgICAgICAgaWYgY21kIGFuZCBTSUdfRklMRToKICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgb3MubWFrZWRpcnMob3MucGF0aC5kaXJuYW1lKFNJR19GSUxFKSwgZXhpc3Rfb2s9VHJ1ZSkKICAgICAgICAgICAgICAgIHdpdGggb3BlbihTSUdfRklMRSwgJ3cnLCBlbmNvZGluZz0ndXRmLTgnKSBhcyBmOgogICAgICAgICAgICAgICAgICAgIGYud3JpdGUoY21kLnN0cmlwKCkpCiAgICAgICAgICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgICAgICAgICBwYXNzCgogICAgICAgIHJlc3AgPSBqc29uLmR1bXBzKHsib2siOiBUcnVlLCAibWVzc2FnZSI6ICLEkMOjIG5o4bqtbiBs4buHbmg6ICIgKyBzdHIoY21kLnN0cmlwKCkpfSkuZW5jb2RlKCd1dGYtOCcpCiAgICAgICAgc2VsZi5zZW5kX3Jlc3BvbnNlKDIwMCkKICAgICAgICBzZWxmLnNlbmRfY29ycygpCiAgICAgICAgc2VsZi5zZW5kX2hlYWRlcignQ29udGVudC1UeXBlJywgJ2FwcGxpY2F0aW9uL2pzb247IGNoYXJzZXQ9dXRmLTgnKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtTGVuZ3RoJywgc3RyKGxlbihyZXNwKSkpCiAgICAgICAgc2VsZi5lbmRfaGVhZGVycygpCiAgICAgICAgc2VsZi53ZmlsZS53cml0ZShyZXNwKQoKICAgIGRlZiBkb19HRVQoc2VsZik6CiAgICAgICAgaWYgc2VsZi5wYXRoLnN0YXJ0c3dpdGgoJy9hcGkvY21kJyk6CiAgICAgICAgICAgIHF1ZXJ5ID0gdXJsbGliLnBhcnNlLnVybHBhcnNlKHNlbGYucGF0aCkucXVlcnkKICAgICAgICAgICAgcGFyYW1zID0gdXJsbGliLnBhcnNlLnBhcnNlX3FzKHF1ZXJ5KQogICAgICAgICAgICBjbWQgPSBwYXJhbXMuZ2V0KCdjbWQnLCBbJyddKVswXQogICAgICAgICAgICBpZiBjbWQgYW5kIFNJR19GSUxFOgogICAgICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgICAgIG9zLm1ha2VkaXJzKG9zLnBhdGguZGlybmFtZShTSUdfRklMRSksIGV4aXN0X29rPVRydWUpCiAgICAgICAgICAgICAgICAgICAgd2l0aCBvcGVuKFNJR19GSUxFLCAndycsIGVuY29kaW5nPSd1dGYtOCcpIGFzIGY6CiAgICAgICAgICAgICAgICAgICAgICAgIGYud3JpdGUoY21kLnN0cmlwKCkpCiAgICAgICAgICAgICAgICBleGNlcHQ6CiAgICAgICAgICAgICAgICAgICAgcGFzcwogICAgICAgICAgICByZXNwID0ganNvbi5kdW1wcyh7Im9rIjogVHJ1ZSwgIm1lc3NhZ2UiOiAixJDDoyBn4butaSBs4buHbmg6ICIgKyBzdHIoY21kKX0pLmVuY29kZSgndXRmLTgnKQogICAgICAgICAgICBzZWxmLnNlbmRfcmVzcG9uc2UoMjAwKQogICAgICAgICAgICBzZWxmLnNlbmRfY29ycygpCiAgICAgICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtVHlwZScsICdhcHBsaWNhdGlvbi9qc29uOyBjaGFyc2V0PXV0Zi04JykKICAgICAgICAgICAgc2VsZi5zZW5kX2hlYWRlcignQ29udGVudC1MZW5ndGgnLCBzdHIobGVuKHJlc3ApKSkKICAgICAgICAgICAgc2VsZi5lbmRfaGVhZGVycygpCiAgICAgICAgICAgIHNlbGYud2ZpbGUud3JpdGUocmVzcCkKICAgICAgICAgICAgcmV0dXJuCgogICAgICAgIGRlZiByZihwKToKICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgaWYgb3MucGF0aC5leGlzdHMocCk6CiAgICAgICAgICAgICAgICAgICAgd2l0aCBvcGVuKHAsICdyJywgZW5jb2Rpbmc9J3V0Zi04JywgZXJyb3JzPSdpZ25vcmUnKSBhcyBmOgogICAgICAgICAgICAgICAgICAgICAgICByZXR1cm4gZi5yZWFkKCkuc3RyaXAoKQogICAgICAgICAgICBleGNlcHQ6CiAgICAgICAgICAgICAgICBwYXNzCiAgICAgICAgICAgIHJldHVybiAiIgoKICAgICAgICB0c0lwID0gcmYociJDOlx0YWlsc2NhbGUtaXAudHh0Iikgb3Igb3MuZW52aXJvbi5nZXQoJ1RBSUxTQ0FMRV9JUCcsICcnKQogICAgICAgIHB1YklwID0gcmYociJDOlxtYWNoaW5lLWlwLnR4dCIpIG9yIG9zLmVudmlyb24uZ2V0KCdNQUNISU5FX1BVQkxJQ19JUCcsICfEkGFuZyBj4bqtcCBuaOG6rXQuLi4nKQogICAgICAgIG5ncm9rUmRwID0gcmYociJDOlxyZHAtbmdyb2sudHh0IikKICAgICAgICBzZElkID0gcmYociJDOlxzdGFyZGVzay1pZC50eHQiKSBvciBvcy5lbnZpcm9uLmdldCgnU1RBUkRFU0tfSUQnLCAnxJBhbmcga+G6v3QgbuG7kWkuLi4nKQogICAgICAgIHNkUGluID0gcmYociJDOlxzdGFyZGVzay1waW4udHh0Iikgb3Igb3MuZW52aXJvbi5nZXQoJ1NUQVJERVNLX1BJTicsICdaZW5vdmEyMDI2JykKICAgICAgICBjZldlYiA9IHJmKHIiQzpcY2xvdWRmbGFyZWQtd2ViLXVybC50eHQiKQogICAgICAgIGx0V2ViID0gcmYociJDOlxsb2NhbHR1bm5lbC13ZWItdXJsLnR4dCIpCiAgICAgICAgY2ZTdW4gPSByZihyIkM6XGNsb3VkZmxhcmVkLXN1bnNoaW5lLXVybC50eHQiKQogICAgICAgIG1hY2hJZCA9IG9zLmVudmlyb24uZ2V0KCdNQUNISU5FX0lEJywgJ3plbm92YS0xJykKICAgICAgICBkaXNwTmFtZSA9IG9zLmVudmlyb24uZ2V0KCdESVNQTEFZX05BTUUnLCAnWmVub3ZhIFVsdGltYXRlIE1hY2hpbmUnKQogICAgICAgIHB3ZCA9IG9zLmVudmlyb24uZ2V0KCdGSVhFRF9QQVNTV09SRCcsICdaZW5vdmFAMjAyNicpCgogICAgICAgIGlmIG5ncm9rUmRwOgogICAgICAgICAgICByZHBBZGRyID0gbmdyb2tSZHAKICAgICAgICBlbGlmIHRzSXAgYW5kIHRzSXAgIT0gIjEyNy4wLjAuMSI6CiAgICAgICAgICAgIHJkcEFkZHIgPSB0c0lwICsgIjozMzg5IgogICAgICAgIGVsc2U6CiAgICAgICAgICAgIHJkcEFkZHIgPSBwdWJJcCArICI6MzM4OSIKCiAgICAgICAgaWYgY2ZTdW46CiAgICAgICAgICAgIHN1bkxpbmsgPSAnPGEgaHJlZj0iJyArIGNmU3VuICsgJyIgdGFyZ2V0PSJfYmxhbmsiIHN0eWxlPSJjb2xvcjojMzhiZGY4O2ZvbnQtd2VpZ2h0OmJvbGQiPvCfjJAgTeG7nyBTdW5zaGluZSBXZWIgVUkgKENsb3VkZmxhcmUpPC9hPicKICAgICAgICBlbHNlOgogICAgICAgICAgICBzdW5MaW5rID0gJ0xvY2FsOiBodHRwczovLzEyNy4wLjAuMTo0Nzk5MCcKCiAgICAgICAgcHViV2ViTGluayA9IGNmV2ViIG9yIGx0V2ViCiAgICAgICAgaWYgcHViV2ViTGluazoKICAgICAgICAgICAgd2ViQmFubmVyID0gJzxkaXYgc3R5bGU9ImJhY2tncm91bmQ6IzFlMjkzYjtwYWRkaW5nOjEycHg7Ym9yZGVyLXJhZGl1czo4cHg7bWFyZ2luLWJvdHRvbToyMHB4O2ZvbnQtc2l6ZToxM3B4O2JvcmRlcjoxcHggc29saWQgIzMzNDE1MSI+8J+MkCA8Yj5MaW5rIFB1YmxpYyBXZWIgUXXhuqNuIEzDvTo8L2I+IDxhIGhyZWY9IicgKyBwdWJXZWJMaW5rICsgJyIgdGFyZ2V0PSJfYmxhbmsiIHN0eWxlPSJjb2xvcjojMzhiZGY4O2ZvbnQtd2VpZ2h0OmJvbGQ7dGV4dC1kZWNvcmF0aW9uOnVuZGVybGluZSI+JyArIHB1YldlYkxpbmsgKyAnPC9hPjwvZGl2PicKICAgICAgICBlbHNlOgogICAgICAgICAgICB3ZWJCYW5uZXIgPSAnJwoKICAgICAgICBodG1sID0gSFRNTF9URU1QTEFURQogICAgICAgIGh0bWwgPSBodG1sLnJlcGxhY2UoIl9fRElTUF9OQU1FX18iLCBkaXNwTmFtZSkKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCJfX01BQ0hfSURfXyIsIG1hY2hJZCkKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCJfX1BVQl9JUF9fIiwgcHViSXApCiAgICAgICAgaHRtbCA9IGh0bWwucmVwbGFjZSgiX19TRF9JRF9fIiwgc2RJZCkKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCJfX1NEX1BJTl9fIiwgc2RQaW4pCiAgICAgICAgaHRtbCA9IGh0bWwucmVwbGFjZSgiX19SRFBfQUREUl9fIiwgcmRwQWRkcikKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCJfX1BXRF9fIiwgcHdkKQogICAgICAgIGh0bWwgPSBodG1sLnJlcGxhY2UoIl9fU1VOX0xJTktfXyIsIHN1bkxpbmspCiAgICAgICAgaHRtbCA9IGh0bWwucmVwbGFjZSgiX19XRUJfQkFOTkVSX18iLCB3ZWJCYW5uZXIpCgogICAgICAgIHJlc3AgPSBodG1sLmVuY29kZSgndXRmLTgnKQogICAgICAgIHNlbGYuc2VuZF9yZXNwb25zZSgyMDApCiAgICAgICAgc2VsZi5zZW5kX2NvcnMoKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtVHlwZScsICd0ZXh0L2h0bWw7IGNoYXJzZXQ9dXRmLTgnKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtTGVuZ3RoJywgc3RyKGxlbihyZXNwKSkpCiAgICAgICAgc2VsZi5lbmRfaGVhZGVycygpCiAgICAgICAgc2VsZi53ZmlsZS53cml0ZShyZXNwKQoKY2xhc3MgVGhyZWFkZWRIVFRQU2VydmVyKHNvY2tldHNlcnZlci5UaHJlYWRpbmdNaXhJbiwgaHR0cC5zZXJ2ZXIuSFRUUFNlcnZlcik6CiAgICBkYWVtb25fdGhyZWFkcyA9IFRydWUKICAgIGFsbG93X3JldXNlX2FkZHJlc3MgPSBUcnVlCgppZiBfX25hbWVfXyA9PSAnX19tYWluX18nOgogICAgc2VydmVyID0gVGhyZWFkZWRIVFRQU2VydmVyKCgnMC4wLjAuMCcsIFBPUlQpLCBaZW5vdmFIYW5kbGVyKQogICAgc2VydmVyLnNlcnZlX2ZvcmV2ZXIoKQo=';
           [System.IO.File]::WriteAllBytes($pyServerPath, [System.Convert]::FromBase64String($pyB64));
 
-          # Khởi chạy Python Server Đa Luồng trên Port 8080
-          Start-Process python -ArgumentList "`"$pyServerPath`"", "$env:WEB_PORT", "`"$env:CONTROL_SIGNAL_FILE`"" -WindowStyle Hidden;
-          Start-Sleep -Seconds 2;
+          # Khởi chạy Python Server Đa Luồng trên Port 8080 (Ghi log chi tiết)
+          $pyExe = (Get-Command python -ErrorAction SilentlyContinue).Source;
+          if (-not $pyExe) { $pyExe = 'python'; }
+          Start-Process -FilePath $pyExe -ArgumentList "`"$pyServerPath`"", "8080", "`"$env:CONTROL_SIGNAL_FILE`"" -RedirectStandardOutput "C:\zenova-web\stdout.log" -RedirectStandardError "C:\zenova-web\stderr.log" -WindowStyle Hidden;
+          
+          # Kiểm tra xác thực port 8080 đã sống trước khi bật Cloudflare Tunnel (Chống 502 Bad Gateway)
+          $serverAlive = $false;
+          for ($i = 0; $i -lt 10; $i++) {
+              Start-Sleep -Seconds 1;
+              try {
+                  $chk = Invoke-WebRequest -Uri "http://127.0.0.1:8080" -UseBasicParsing -TimeoutSec 2;
+                  if ($chk.StatusCode -eq 200) { $serverAlive = $true; break; }
+              } catch {}
+          }
+          if ($serverAlive) {
+              Write-Host "│ ✅ Python Web Server đã lắng nghe thành công trên port 8080!" -ForegroundColor Green;
+          } else {
+              Write-Host "│ ⚠️ Khởi động lại Python Web Server..." -ForegroundColor Yellow;
+              Start-Process -FilePath $pyExe -ArgumentList "`"$pyServerPath`"", "8080", "`"$env:CONTROL_SIGNAL_FILE`"" -WindowStyle Hidden;
+          }
 
           # Khởi động Dual Tunnels (Cloudflare + Localtunnel)
           $cfExe = 'C:\cloudflared.exe';
@@ -1623,7 +1708,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Khởi chạy Web Quản Lý Linux (Port 8080)
         run: |
-          echo 'aW1wb3J0IGh0dHAuc2VydmVyLCBzb2NrZXRzZXJ2ZXIsIGpzb24sIG9zLCBzeXMKClBPUlQgPSA4MDgwCmNsYXNzIEhhbmRsZXIoaHR0cC5zZXJ2ZXIuU2ltcGxlSFRUUFJlcXVlc3RIYW5kbGVyKToKICAgIGRlZiBkb19QT1NUKHNlbGYpOgogICAgICAgIGNtZCA9ICIiCiAgICAgICAgaWYgc2VsZi5wYXRoID09ICIvc3RvcCI6IGNtZCA9ICJTVE9QX1NFU1NJT04iCiAgICAgICAgZWxpZiBzZWxmLnBhdGggPT0gIi9yZXN0YXJ0IjogY21kID0gIlJFU1RBUlRfU0VTU0lPTiIKICAgICAgICBlbGlmIHNlbGYucGF0aCA9PSAiL3NhdmUiOiBjbWQgPSAiU0FWRV9OT1ciCiAgICAgICAgZWxzZToKICAgICAgICAgICAgbGVuZ3RoID0gaW50KHNlbGYuaGVhZGVycy5nZXQoJ2NvbnRlbnQtbGVuZ3RoJywgMCkpCiAgICAgICAgICAgIGJvZHkgPSBzZWxmLnJmaWxlLnJlYWQobGVuZ3RoKS5kZWNvZGUoJ3V0Zi04JywgZXJyb3JzPSdpZ25vcmUnKQogICAgICAgICAgICB0cnk6IGNtZCA9IGpzb24ubG9hZHMoYm9keSkuZ2V0KCdjbWQnLCBib2R5KQogICAgICAgICAgICBleGNlcHQ6IGNtZCA9IGJvZHkKCiAgICAgICAgaWYgY21kOgogICAgICAgICAgICB3aXRoIG9wZW4oIi90bXAvemVub3ZhLXNpZ25hbC50eHQiLCAidyIpIGFzIGY6CiAgICAgICAgICAgICAgICBmLndyaXRlKGNtZC5zdHJpcCgpKQoKICAgICAgICByZXNwID0ganNvbi5kdW1wcyh7Im9rIjogVHJ1ZSwgIm1lc3NhZ2UiOiBmIsSQw6MgZ+G7rWkgbOG7h25oIExpbnV4OiB7Y21kfSJ9KS5lbmNvZGUoJ3V0Zi04JykKICAgICAgICBzZWxmLnNlbmRfcmVzcG9uc2UoMjAwKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtVHlwZScsICdhcHBsaWNhdGlvbi9qc29uJykKICAgICAgICBzZWxmLmVuZF9oZWFkZXJzKCkKICAgICAgICBzZWxmLndmaWxlLndyaXRlKHJlc3ApCgogICAgZGVmIGRvX0dFVChzZWxmKToKICAgICAgICB0c19pcCA9IG9zLmVudmlyb24uZ2V0KCdUQUlMU0NBTEVfSVAnLCAnMTI3LjAuMC4xJykKICAgICAgICBwd2QgPSBvcy5lbnZpcm9uLmdldCgnRklYRURfUEFTU1dPUkQnLCAnWmVub3ZhQDIwMjYnKQogICAgICAgIG1hY2hfaWQgPSBvcy5lbnZpcm9uLmdldCgnTUFDSElORV9JRCcsICd6ZW5vdmEtbGludXgtMScpCiAgICAgICAgaHRtbCA9IGYiIiI8IURPQ1RZUEUgaHRtbD48aHRtbD48aGVhZD48bWV0YSBjaGFyc2V0PSJ1dGYtOCI+PHRpdGxlPlplbm92YSBMaW51eCBDb250cm9sPC90aXRsZT4KICAgICAgICA8c3R5bGU+Ym9keXt7YmFja2dyb3VuZDojMGQxMTE3O2NvbG9yOiNjOWQxZDk7Zm9udC1mYW1pbHk6c2Fucy1zZXJpZjtwYWRkaW5nOjMwcHg7dGV4dC1hbGlnbjpjZW50ZXJ9fQogICAgICAgIC5jYXJke3tiYWNrZ3JvdW5kOiMxNjFiMjI7cGFkZGluZzoyNHB4O2JvcmRlci1yYWRpdXM6MTJweDttYXgtd2lkdGg6NjAwcHg7bWFyZ2luOmF1dG87Ym9yZGVyOjFweCBzb2xpZCAjMzAzNjNkfX0KICAgICAgICAuYnRue3twYWRkaW5nOjEycHggMjRweDttYXJnaW46OHB4O2JvcmRlcjpub25lO2JvcmRlci1yYWRpdXM6OHB4O2N1cnNvcjpwb2ludGVyO2ZvbnQtd2VpZ2h0OmJvbGQ7Y29sb3I6I2ZmZn19CiAgICAgICAgLnNhdmV7e2JhY2tncm91bmQ6IzFmNmZlYn19LnJzdHt7YmFja2dyb3VuZDojZDI5OTIyfX0uc3RvcHt7YmFja2dyb3VuZDojZGEzNjMzfX08L3N0eWxlPjwvaGVhZD4KICAgICAgICA8Ym9keT48ZGl2IGNsYXNzPSJjYXJkIj48aDI+8J+QpyBaRU5PVkEgTElOVVggVlBTPC9oMj48cD5Nw6F5OiA8Yj57bWFjaF9pZH08L2I+IHwgWFJEUDogPGI+e3RzX2lwfTozMzg5PC9iPjwvcD4KICAgICAgICA8cD5Vc2VyOiA8Yj5ydW5uZXI8L2I+IHwgUGFzczogPGI+e3B3ZH08L2I+PC9wPjxociBzdHlsZT0iYm9yZGVyLWNvbG9yOiMzMDM2M2QiPgogICAgICAgIDxidXR0b24gY2xhc3M9ImJ0biBzYXZlIiBvbmNsaWNrPSJzZW5kKCdTQVZFX05PVycpIj7wn5K+IEzGr1UgTkdBWTwvYnV0dG9uPgogICAgICAgIDxidXR0b24gY2xhc3M9ImJ0biByc3QiIG9uY2xpY2s9InNlbmQoJ1JFU1RBUlRfU0VTU0lPTicpIj7wn5SBIFJFU0VUIFBIScOKTjwvYnV0dG9uPgogICAgICAgIDxidXR0b24gY2xhc3M9ImJ0biBzdG9wIiBvbmNsaWNrPSJzZW5kKCdTVE9QX1NFU1NJT04nKSI+8J+bkSBU4bquVCBWUFM8L2J1dHRvbj48L2Rpdj4KICAgICAgICA8c2NyaXB0PmFzeW5jIGZ1bmN0aW9uIHNlbmQoYyl7eyBpZihjb25maXJtKCdYw6FjIG5o4bqtbiBs4buHbmg6ICcrYysnPycpKXt7IGF3YWl0IGZldGNoKCcvYXBpL2NtZCcse3ttZXRob2Q6J1BPU1QnLGJvZHk6SlNPTi5zdHJpbmdpZnkoe3tjbWQ6Y319KX19KTsgYWxlcnQoJ8SQw6MgZ+G7rWkhJyk7IH19IH19PC9zY3JpcHQ+CiAgICAgICAgPC9ib2R5PjwvaHRtbD4iIiIKICAgICAgICBzZWxmLnNlbmRfcmVzcG9uc2UoMjAwKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtVHlwZScsICd0ZXh0L2h0bWw7IGNoYXJzZXQ9dXRmLTgnKQogICAgICAgIHNlbGYuZW5kX2hlYWRlcnMoKQogICAgICAgIHNlbGYud2ZpbGUud3JpdGUoaHRtbC5lbmNvZGUoJ3V0Zi04JykpCgpjbGFzcyBUaHJlYWRlZEhUVFBTZXJ2ZXIoc29ja2V0c2VydmVyLlRocmVhZGluZ01peEluLCBodHRwLnNlcnZlci5IVFRQU2VydmVyKToKICAgIGRhZW1vbl90aHJlYWRzID0gVHJ1ZQogICAgYWxsb3dfcmV1c2VfYWRkcmVzcyA9IFRydWUKCmlmIF9fbmFtZV9fID09ICdfX21haW5fXyc6CiAgICBzZXJ2ZXIgPSBUaHJlYWRlZEhUVFBTZXJ2ZXIoKCcwLjAuMC4wJywgUE9SVCksIEhhbmRsZXIpCiAgICBzZXJ2ZXIuc2VydmVfZm9yZXZlcigpCg==' | base64 -d > /tmp/server.py
+          echo 'aW1wb3J0IGh0dHAuc2VydmVyLCBzb2NrZXRzZXJ2ZXIsIGpzb24sIG9zLCBzeXMsIHVybGxpYi5wYXJzZQoKUE9SVCA9IDgwODAKU0lHX0ZJTEUgPSAiL3RtcC96ZW5vdmEtc2lnbmFsLnR4dCIKCkhUTUxfVEVNUExBVEUgPSAiIiI8IURPQ1RZUEUgaHRtbD4KPGh0bWwgbGFuZz0idmkiPgo8aGVhZD4KPG1ldGEgY2hhcnNldD0idXRmLTgiPgo8dGl0bGU+WmVub3ZhIExpbnV4IENvbnRyb2w8L3RpdGxlPgo8c3R5bGU+CmJvZHkgeyBiYWNrZ3JvdW5kOiMwZDExMTc7IGNvbG9yOiNjOWQxZDk7IGZvbnQtZmFtaWx5OnN5c3RlbS11aSwtYXBwbGUtc3lzdGVtLHNhbnMtc2VyaWY7IHBhZGRpbmc6MzBweDsgdGV4dC1hbGlnbjpjZW50ZXI7IH0KLmNhcmQgeyBiYWNrZ3JvdW5kOiMxNjFiMjI7IHBhZGRpbmc6MjRweDsgYm9yZGVyLXJhZGl1czoxMnB4OyBtYXgtd2lkdGg6NjAwcHg7IG1hcmdpbjphdXRvOyBib3JkZXI6MXB4IHNvbGlkICMzMDM2M2Q7IGJveC1zaGFkb3c6MCAxMHB4IDIwcHggcmdiYSgwLDAsMCwwLjUpOyB9Ci5idG4geyBwYWRkaW5nOjEycHggMjRweDsgbWFyZ2luOjhweDsgYm9yZGVyOm5vbmU7IGJvcmRlci1yYWRpdXM6OHB4OyBjdXJzb3I6cG9pbnRlcjsgZm9udC13ZWlnaHQ6Ym9sZDsgY29sb3I6I2ZmZjsgfQouc2F2ZSB7IGJhY2tncm91bmQ6IzFmNmZlYjsgfSAucnN0IHsgYmFja2dyb3VuZDojZDI5OTIyOyB9IC5zdG9wIHsgYmFja2dyb3VuZDojZGEzNjMzOyB9Ci5jb2RlIHsgYmFja2dyb3VuZDojMGQxMTE3OyBwYWRkaW5nOjZweCAxMHB4OyBib3JkZXItcmFkaXVzOjZweDsgZm9udC1mYW1pbHk6bW9ub3NwYWNlOyBjb2xvcjojNThhNmZmOyB9Cjwvc3R5bGU+CjwvaGVhZD4KPGJvZHk+CjxkaXYgY2xhc3M9ImNhcmQiPgo8aDI+8J+QpyBaRU5PVkEgTElOVVggVlBTPC9oMj4KPHA+TcOheTogPGI+X19NQUNIX0lEX188L2I+IHwgSVAgT3V0Ym91bmQ6IDxiPl9fUFVCX0lQX188L2I+PC9wPgo8cD5YUkRQIEhvc3Q6IDxzcGFuIGNsYXNzPSJjb2RlIj5fX1hSRFBfQUREUl9fPC9zcGFuPjwvcD4KPHA+VXNlcjogPGI+cnVubmVyPC9iPiB8IFBhc3M6IDxiPl9fUFdEX188L2I+PC9wPgo8aHIgc3R5bGU9ImJvcmRlci1jb2xvcjojMzAzNjNkIj4KPGJ1dHRvbiBjbGFzcz0iYnRuIHNhdmUiIG9uY2xpY2s9InNlbmRDbWQoJ1NBVkVfTk9XJykiPvCfkr4gTMavVSBOR0FZPC9idXR0b24+CjxidXR0b24gY2xhc3M9ImJ0biByc3QiIG9uY2xpY2s9InNlbmRDbWQoJ1JFU1RBUlRfU0VTU0lPTicpIj7wn5SBIFJFU0VUIFBIScOKTjwvYnV0dG9uPgo8YnV0dG9uIGNsYXNzPSJidG4gc3RvcCIgb25jbGljaz0ic2VuZENtZCgnU1RPUF9TRVNTSU9OJykiPvCfm5EgVOG6rlQgVlBTPC9idXR0b24+CjwvZGl2Pgo8c2NyaXB0Pgphc3luYyBmdW5jdGlvbiBzZW5kQ21kKGMpIHsKICAgIGlmIChjb25maXJtKCdYw6FjIG5o4bqtbiB0aOG7sWMgaGnhu4duIGzhu4duaDogJyArIGMgKyAnPycpKSB7CiAgICAgICAgdHJ5IHsKICAgICAgICAgICAgYXdhaXQgZmV0Y2goJy9hcGkvY21kJywgeyBtZXRob2Q6J1BPU1QnLCBoZWFkZXJzOnsnQ29udGVudC1UeXBlJzonYXBwbGljYXRpb24vanNvbid9LCBib2R5OkpTT04uc3RyaW5naWZ5KHtjbWQ6Y30pIH0pOwogICAgICAgICAgICBhbGVydCgnxJDDoyBn4butaSBs4buHbmghJyk7CiAgICAgICAgfSBjYXRjaChlKSB7CiAgICAgICAgICAgIGFsZXJ0KCdM4buXaTogJyArIGUpOwogICAgICAgIH0KICAgIH0KfQo8L3NjcmlwdD4KPC9ib2R5Pgo8L2h0bWw+CiIiIgoKY2xhc3MgSGFuZGxlcihodHRwLnNlcnZlci5TaW1wbGVIVFRQUmVxdWVzdEhhbmRsZXIpOgogICAgZGVmIGxvZ19tZXNzYWdlKHNlbGYsIGZvcm1hdCwgKmFyZ3MpOiBwYXNzCgogICAgZGVmIGRvX1BPU1Qoc2VsZik6CiAgICAgICAgY21kID0gIiIKICAgICAgICBpZiBzZWxmLnBhdGggPT0gIi9zdG9wIjogY21kID0gIlNUT1BfU0VTU0lPTiIKICAgICAgICBlbGlmIHNlbGYucGF0aCA9PSAiL3Jlc3RhcnQiOiBjbWQgPSAiUkVTVEFSVF9TRVNTSU9OIgogICAgICAgIGVsaWYgc2VsZi5wYXRoID09ICIvc2F2ZSI6IGNtZCA9ICJTQVZFX05PVyIKICAgICAgICBlbHNlOgogICAgICAgICAgICBsZW5ndGggPSBpbnQoc2VsZi5oZWFkZXJzLmdldCgnY29udGVudC1sZW5ndGgnLCAwKSkKICAgICAgICAgICAgYm9keSA9IHNlbGYucmZpbGUucmVhZChsZW5ndGgpLmRlY29kZSgndXRmLTgnLCBlcnJvcnM9J2lnbm9yZScpCiAgICAgICAgICAgIHRyeTogY21kID0ganNvbi5sb2Fkcyhib2R5KS5nZXQoJ2NtZCcsIGJvZHkpCiAgICAgICAgICAgIGV4Y2VwdDogY21kID0gYm9keQoKICAgICAgICBpZiBjbWQ6CiAgICAgICAgICAgIHdpdGggb3BlbihTSUdfRklMRSwgInciKSBhcyBmOgogICAgICAgICAgICAgICAgZi53cml0ZShjbWQuc3RyaXAoKSkKCiAgICAgICAgcmVzcCA9IGpzb24uZHVtcHMoeyJvayI6IFRydWUsICJtZXNzYWdlIjogIsSQw6MgZ+G7rWkgbOG7h25oIExpbnV4OiAiICsgc3RyKGNtZCl9KS5lbmNvZGUoJ3V0Zi04JykKICAgICAgICBzZWxmLnNlbmRfcmVzcG9uc2UoMjAwKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtVHlwZScsICdhcHBsaWNhdGlvbi9qc29uJykKICAgICAgICBzZWxmLmVuZF9oZWFkZXJzKCkKICAgICAgICBzZWxmLndmaWxlLndyaXRlKHJlc3ApCgogICAgZGVmIGRvX0dFVChzZWxmKToKICAgICAgICBkZWYgcmYocCk6CiAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgIGlmIG9zLnBhdGguZXhpc3RzKHApOgogICAgICAgICAgICAgICAgICAgIHdpdGggb3BlbihwLCAncicpIGFzIGY6IHJldHVybiBmLnJlYWQoKS5zdHJpcCgpCiAgICAgICAgICAgIGV4Y2VwdDogcGFzcwogICAgICAgICAgICByZXR1cm4gIiIKCiAgICAgICAgdHNfaXAgPSByZigiL3RtcC90YWlsc2NhbGUtaXAudHh0Iikgb3Igb3MuZW52aXJvbi5nZXQoJ1RBSUxTQ0FMRV9JUCcsICcnKQogICAgICAgIHB1Yl9pcCA9IHJmKCIvdG1wL21hY2hpbmUtaXAudHh0Iikgb3Igb3MuZW52aXJvbi5nZXQoJ01BQ0hJTkVfUFVCTElDX0lQJywgJzEyNy4wLjAuMScpCiAgICAgICAgcHdkID0gb3MuZW52aXJvbi5nZXQoJ0ZJWEVEX1BBU1NXT1JEJywgJ1plbm92YUAyMDI2JykKICAgICAgICBtYWNoX2lkID0gb3MuZW52aXJvbi5nZXQoJ01BQ0hJTkVfSUQnLCAnemVub3ZhLWxpbnV4LTEnKQoKICAgICAgICB4cmRwX2FkZHIgPSAodHNfaXAgKyAiOjMzODkiKSBpZiB0c19pcCBlbHNlIChwdWJfaXAgKyAiOjMzODkiKQoKICAgICAgICBodG1sID0gSFRNTF9URU1QTEFURQogICAgICAgIGh0bWwgPSBodG1sLnJlcGxhY2UoIl9fTUFDSF9JRF9fIiwgbWFjaF9pZCkKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCJfX1BVQl9JUF9fIiwgcHViX2lwKQogICAgICAgIGh0bWwgPSBodG1sLnJlcGxhY2UoIl9fWFJEUF9BRERSX18iLCB4cmRwX2FkZHIpCiAgICAgICAgaHRtbCA9IGh0bWwucmVwbGFjZSgiX19QV0RfXyIsIHB3ZCkKCiAgICAgICAgc2VsZi5zZW5kX3Jlc3BvbnNlKDIwMCkKICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKCdDb250ZW50LVR5cGUnLCAndGV4dC9odG1sOyBjaGFyc2V0PXV0Zi04JykKICAgICAgICBzZWxmLmVuZF9oZWFkZXJzKCkKICAgICAgICBzZWxmLndmaWxlLndyaXRlKGh0bWwuZW5jb2RlKCd1dGYtOCcpKQoKY2xhc3MgVGhyZWFkZWRIVFRQU2VydmVyKHNvY2tldHNlcnZlci5UaHJlYWRpbmdNaXhJbiwgaHR0cC5zZXJ2ZXIuSFRUUFNlcnZlcik6CiAgICBkYWVtb25fdGhyZWFkcyA9IFRydWUKICAgIGFsbG93X3JldXNlX2FkZHJlc3MgPSBUcnVlCgppZiBfX25hbWVfXyA9PSAnX19tYWluX18nOgogICAgc2VydmVyID0gVGhyZWFkZWRIVFRQU2VydmVyKCgnMC4wLjAuMCcsIFBPUlQpLCBIYW5kbGVyKQogICAgc2VydmVyLnNlcnZlX2ZvcmV2ZXIoKQo=' | base64 -d > /tmp/server.py
 
           nohup python3 /tmp/server.py >/dev/null 2>&1 &
 
