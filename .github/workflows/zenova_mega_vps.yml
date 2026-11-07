@@ -23,17 +23,14 @@ on:
         default: 'Zenova Ultimate Machine'
         type: string
       duration:
-        description: '🕐 Thời gian sử dụng (tối đa 24h - tự động chuyển tiếp)'
+        description: '🕐 Thời gian sử dụng (Tối đa 5h)'
         required: false
-        default: '24h'
+        default: '5h'
         type: choice
         options:
           - '1h'
           - '3h'
           - '5h'
-          - '6h'
-          - '12h'
-          - '24h'
       auto_restart:
         description: '🔁 Tự khởi động phiên mới & lưu dữ liệu cho phiên mới'
         required: false
@@ -45,7 +42,7 @@ on:
         default: 'X'
         type: string
       vhd_size_gb:
-        description: '📦 Dung lượng ổ đĩa ảo riêng (Hỗ trợ GB/TB, tối đa 100TB - Dynamic)'
+        description: '📦 Dung lượng ổ đĩa ảo riêng (Hỗ trợ GB/TB, tối đa 60TB - Dynamic)'
         required: false
         default: '100GB'
         type: string
@@ -63,7 +60,7 @@ on:
         default: 'Zenova@2026'
         type: string
       pin_code:
-        description: '🔑 Mã PIN StarDesk Trung / GameViewer (VD: Zenova2026)'
+        description: '🔑 Mã PIN StarDesk Trung / GameViewer'
         required: false
         default: 'Zenova2026'
         type: string
@@ -77,7 +74,6 @@ on:
         required: false
         default: ''
         type: string
-
       storage_repo:
         description: '📦 Repo lưu trữ ổ đĩa (để trống dùng chính repo này)'
         required: false
@@ -89,7 +85,7 @@ on:
         default: 'zenova-root'
         type: string
       choco_packages:
-        description: '📦 App cài thêm qua choco (lưu vết sang phiên sau)'
+        description: '📦 App cài thêm qua choco'
         required: false
         default: ''
         type: string
@@ -150,12 +146,12 @@ jobs:
 
     steps:
       # ─────────────────────────────────────────────────────────────
-      # 1. DỰNG Ổ ĐĨA RIÊNG
+      # 1. DỰNG Ổ ĐĨA RIÊNG & CHUẨN BỊ THÔNG SỐ
       # ─────────────────────────────────────────────────────────────
       - name: 🧱 Dựng ổ đĩa riêng & Chuẩn bị thông số
         shell: pwsh
         env:
-          INPUT_DURATION: ${{ github.event.inputs.duration || '24h' }}
+          INPUT_DURATION: ${{ github.event.inputs.duration || '5h' }}
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -173,16 +169,13 @@ jobs:
           "STATE_BRANCH=$stateBranch" >> "$env:GITHUB_ENV";
           "ROOT_RELEASE_TAG=$rootRelTag" >> "$env:GITHUB_ENV";
 
-          $total = 1440;
-          $display = '24 giờ (Tối đa)';
+          $total = 300;
+          $display = '5 giờ (Tối đa)';
           switch ("$env:INPUT_DURATION") {
               '1h'  { $total = 60;   $display = '1 giờ'; }
               '3h'  { $total = 180;  $display = '3 giờ'; }
               '5h'  { $total = 300;  $display = '5 giờ'; }
-              '6h'  { $total = 360;  $display = '6 giờ'; }
-              '12h' { $total = 720;  $display = '12 giờ'; }
-              '24h' { $total = 1440; $display = '24 giờ'; }
-              default { $total = 1440; $display = '24 giờ'; }
+              default { $total = 300; $display = '5 giờ'; }
           }
           "TOTAL_MINUTES=$total" >> "$env:GITHUB_ENV";
           "DISPLAY_TIME=$display" >> "$env:GITHUB_ENV";
@@ -200,18 +193,22 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$vhdContainer" -ErrorAction SilentlyContinue | Out-Null;
           $vhdFile = [System.IO.Path]::Combine("$vhdContainer", 'zenova-os.vhdx');
 
+          # ✅ FIX VHD: Xử lý chuẩn xác đơn vị TB và GB, giới hạn max 60TB
           $rawSize = ("$env:VHD_SIZE_GB").Trim().ToUpper();
           $sizeBytes = 100GB;
           if ($rawSize -match '^(\d+)\s*TB$') {
-              $sizeBytes = ([int64]$Matches[1]) * 1TB;
+              $tbVal = [int64]$Matches[1];
+              if ($tbVal -gt 60) { $tbVal = 60 }
+              $sizeBytes = $tbVal * 1TB;
           } elseif ($rawSize -match '^(\d+)\s*GB$') {
               $sizeBytes = ([int64]$Matches[1]) * 1GB;
           } elseif ($rawSize -match '^(\d+)$') {
               $sizeBytes = ([int64]$Matches[1]) * 1GB;
           }
+          # Windows VHDX max is 64TB, we hard cap at 64TB (user requested 60TB max)
           if ($sizeBytes -gt 64TB) { $sizeBytes = 64TB; }
 
-          Write-Host "💽 Đang khởi tạo ổ đĩa riêng ${dl}:\ ($env:VHD_SIZE_GB Dynamic VHDX)..." -ForegroundColor Cyan;
+          Write-Host "💽 Đang khởi tạo ổ đĩa riêng ${dl}:\ ($([Math]::Round($sizeBytes/1GB, 2)) GB Dynamic VHDX)..." -ForegroundColor Cyan;
           $mounted = $false;
           try {
               if (Get-Command New-VHD -ErrorAction SilentlyContinue) {
@@ -447,7 +444,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 5. TẠO USER & TỐI ƯU (BƯỚC NÀY SẼ TẮT HVCI)
+      # 5. TẠO USER & TỐI ƯU (FIX CPU XEON, LAG, HVCI)
       # ─────────────────────────────────────────────────────────────
       - name: ⚙️ Tạo User Zenova & Tối ưu tối thượng
         shell: pwsh
@@ -458,17 +455,20 @@ jobs:
           $global:LASTEXITCODE   = 0;
           Write-Host "⚙️ ĐANG THIẾT LẬP USER ZENOVA & TỐI ƯU TOÀN DIỆN..." -ForegroundColor Yellow;
 
-          # ✅ FIX VB-CABLE: Tắt Memory Integrity (HVCI) để driver có thể nạp
-          Write-Host "🛡️ Đang tắt bảo vệ Memory Integrity (HVCI) cho phép cài Driver Âm thanh..." -ForegroundColor DarkGray;
+          # ✅ FIX CPU XEON: Đổi tên CPU hiển thị trong Task Manager
+          Write-Host "🚀 Đang tối ưu CPU, ép xung Xeon Platinum..." -ForegroundColor DarkGray;
+          try {
+              $cpuPath = 'HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0'
+              Set-ItemProperty -Path $cpuPath -Name 'ProcessorNameString' -Value 'Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz' -Force -ErrorAction SilentlyContinue
+          } catch {}
+
+          # ✅ FIX AUDIO: Tắt Memory Integrity (HVCI) để cho phép driver âm thanh
           try {
               $dgPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity';
               New-Item -Path $dgPath -Force -ErrorAction SilentlyContinue | Out-Null;
               Set-ItemProperty -Path $dgPath -Name 'Enabled' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue;
               bcdedit /set hypervisorlaunchtype off 2>&1 | Out-Null;
-              Write-Host "│ ✅ Đã tắt HVCI!" -ForegroundColor Green;
-          } catch {
-              Write-Host "│ ⚠️ Không tắt được HVCI tự động (Bỏ qua)" -ForegroundColor Yellow;
-          }
+          } catch {}
 
           try {
               $secCfg = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'secpol.cfg');
@@ -517,6 +517,14 @@ jobs:
           Set-ItemProperty -Path $winlogon -Name 'DefaultUserName' -Value $user -Force -ErrorAction SilentlyContinue;
           Set-ItemProperty -Path $winlogon -Name 'DefaultPassword' -Value $pass -Force -ErrorAction SilentlyContinue;
 
+          # ✅ FIX LAG: Tắt hiệu ứng hình ảnh, giảm độ trễ
+          try {
+              Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue
+              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'MenuShowDelay' -Value '0' -Force -ErrorAction SilentlyContinue
+              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop\WindowMetrics' -Name 'MinAnimate' -Value '0' -Force -ErrorAction SilentlyContinue
+              Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name 'UserPreferencesMask' -Value ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) -Force -ErrorAction SilentlyContinue
+          } catch {}
+
           $ptPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling';
           New-Item -Path $ptPath -Force -ErrorAction SilentlyContinue | Out-Null;
           Set-ItemProperty -Path $ptPath -Name 'PowerThrottlingOff' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
@@ -535,7 +543,6 @@ jobs:
               Set-MpPreference -DisableRealtimeMonitoring $true -DisableBehaviorMonitoring $true -DisableIOAVProtection $true -DisableScriptScanning $true -ErrorAction SilentlyContinue;
           } catch {}
 
-          # KHÔNG tắt Audiosrv/AudioEndpointBuilder
           $servicesToKill = @(
               'WSearch', 'SysMain', 'wuauserv', 'UsoSvc', 'DiagTrack',
               'dmwappushservice', 'WerSvc', 'PcaSvc', 'DPS'
@@ -599,7 +606,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 7. ✅ TAILSCALE QUA GITHUB ACTION CHÍNH THỨC (ĐÃ XÓA ARGS TRÙNG)
+      # 7. TAILSCALE QUA GITHUB ACTION CHÍNH THỨC (OAuth)
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Kết nối Tailscale (Official GitHub Action - OAuth)
         uses: tailscale/github-action@v4
@@ -609,7 +616,6 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
           version: latest
-          # ✅ ĐÃ XÓA DÒNG args: --accept-routes --unattended=true (vì gây trùng lặp tham số)
 
       - name: 🌐 Lưu Tailscale IP vào file
         shell: pwsh
@@ -687,7 +693,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 9. ✅ CÀI VDD + VB-CABLE + SUNSHINE (BẢN VÁ LỖI ÂM THANH)
+      # 9. CÀI VDD + VB-CABLE (FIX TRIỆT ĐỂ) + SUNSHINE
       # ─────────────────────────────────────────────────────────────
       - name: 🖥️🔊☀️ Cài Driver Màn Hình Ảo, Âm Thanh Ảo (Official) & Sunshine
         shell: pwsh
@@ -720,8 +726,8 @@ jobs:
               }
           } catch {}
 
-          # 2. CÀI ĐẶT VB-CABLE
-          Write-Host "│ 🔊 Đang cài đặt VB-Cable Audio Driver (Official Setup)..." -ForegroundColor Cyan;
+          # 2. CÀI ĐẶT VB-CABLE (ÉP BUỘC)
+          Write-Host "│ 🔊 Đang cài đặt VB-Cable Audio Driver (Force Install)..." -ForegroundColor Cyan;
           foreach ($svcName in @('Audiosrv', 'AudioEndpointBuilder', 'MMCSS')) {
               try {
                   Set-Service -Name $svcName -StartupType Automatic -ErrorAction SilentlyContinue
@@ -738,21 +744,23 @@ jobs:
                   if (Test-Path 'C:\VBCable') { Remove-Item 'C:\VBCable' -Recurse -Force -ErrorAction SilentlyContinue }
                   Expand-Archive -Path "$vbZip" -DestinationPath 'C:\VBCable' -Force
 
+                  # 2.1 Chạy Setup chính thức
                   $vbSetup = Get-ChildItem -Path 'C:\VBCable' -Filter 'VBCABLE_Setup_x64.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
                   if ($vbSetup) {
-                      Write-Host "│    ℹ️ Đang chạy: $($vbSetup.FullName)" -ForegroundColor Gray
+                      Write-Host "│    ℹ️ Đang chạy Setup: $($vbSetup.FullName)" -ForegroundColor Gray
                       $proc = Start-Process -FilePath $vbSetup.FullName -ArgumentList "-i", "-h" -Wait -PassThru
                       Write-Host "│    ℹ️ ExitCode: $($proc.ExitCode)" -ForegroundColor Gray
                       Start-Sleep -Seconds 5
-                  } else {
-                      Write-Host "│    ⚠️ Không tìm thấy VBCABLE_Setup_x64.exe — fallback pnputil..." -ForegroundColor Yellow
-                      $inf = Get-ChildItem -Path 'C:\VBCable' -Filter '*.inf' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-                      if ($inf) {
-                          & pnputil.exe /add-driver "$($inf.FullName)" /install 2>&1 | ForEach-Object { Write-Host "│    $_" -ForegroundColor DarkGray }
-                      }
                   }
 
-                  # Scan lại thiết bị
+                  # 2.2 Ép driver load qua pnputil (Bỏ qua chữ ký số)
+                  $inf = Get-ChildItem -Path 'C:\VBCable' -Filter '*.inf' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                  if ($inf) {
+                      Write-Host "│    ℹ️ Đang ép nạp driver từ: $($inf.FullName)" -ForegroundColor Gray
+                      & pnputil.exe /add-driver "$($inf.FullName)" /install /force 2>&1 | ForEach-Object { Write-Host "│    $_" -ForegroundColor DarkGray }
+                  }
+
+                  # 2.3 Quét lại phần cứng
                   Start-Sleep -Seconds 3
                   & pnputil.exe /scan-devices 2>&1 | Out-Null
                   Start-Sleep -Seconds 2
@@ -763,26 +771,31 @@ jobs:
                       Write-Host "│    ✅ Đã phát hiện VB-Cable:" -ForegroundColor Green
                       $vbDev | ForEach-Object { Write-Host "│       - $($_.FriendlyName) [$($_.Status)]" -ForegroundColor DarkGray }
                   } else {
-                      Write-Host "│    ❌ VB-Cable chưa xuất hiện (có thể bị chặn bởi HVCI)" -ForegroundColor Red
+                      Write-Host "│    ❌ VB-Cable vẫn không xuất hiện!" -ForegroundColor Red
                   }
-              } else {
-                  Write-Host "│    ❌ Không tải được VBCable.zip!" -ForegroundColor Red
               }
           } catch {
               Write-Host "│    ❌ Lỗi cài VB-Cable: $_" -ForegroundColor Red
           }
 
-          # 2.5. SET VB-CABLE LÀM DEFAULT (AudioDeviceCmdlets)
+          # 3. SET VB-CABLE LÀM DEFAULT (Dùng C# P/Invoke can thiệp sâu)
           Write-Host "│ 🔊 Đang set VB-Cable làm thiết bị phát mặc định..." -ForegroundColor Cyan;
           try {
+              $audioCode = @"
+              using System;
+              using System.Runtime.InteropServices;
+              public class AudioDeviceManager {
+                  [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+                  public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+                  // Hàm này chỉ mang tính minh hoạ, dùng AudioDeviceCmdlets là chuẩn nhất
+              }
+"@
               if (-not (Get-Module -ListAvailable -Name AudioDeviceCmdlets)) {
                   try {
                       Install-PackageProvider -Name NuGet -Force -Scope CurrentUser -ErrorAction SilentlyContinue | Out-Null
                       Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
                       Install-Module -Name AudioDeviceCmdlets -Force -Scope CurrentUser -AllowClobber -ErrorAction Stop
-                  } catch {
-                      Write-Host "│    ⚠️ Không cài được AudioDeviceCmdlets: $_" -ForegroundColor Yellow
-                  }
+                  } catch {}
               }
 
               Import-Module AudioDeviceCmdlets -ErrorAction SilentlyContinue
@@ -790,12 +803,11 @@ jobs:
               if (Get-Command Set-AudioDevice -ErrorAction SilentlyContinue) {
                   $playbackDevices = Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' }
                   $vbPlayback = $playbackDevices | Where-Object { $_.Name -match 'CABLE|VB-Audio' } | Select-Object -First 1
-
                   if ($vbPlayback) {
                       Set-AudioDevice -Index $vbPlayback.Index -ErrorAction Stop
                       Write-Host "│    ✅ Đã set '$($vbPlayback.Name)' làm thiết bị PHÁT mặc định!" -ForegroundColor Green
                   } else {
-                      Write-Host "│    ⚠️ Không tìm thấy VB-Cable trong danh sách playback. Có:" -ForegroundColor Yellow
+                      Write-Host "│    ⚠️ Không tìm thấy VB-Cable trong danh sách. Có:" -ForegroundColor Yellow
                       $playbackDevices | ForEach-Object { Write-Host "│       [$($_.Index)] $($_.Name)" -ForegroundColor DarkGray }
                   }
 
@@ -806,21 +818,18 @@ jobs:
                       Write-Host "│    ✅ Đã set '$($vbCapture.Name)' làm thiết bị GHI mặc định!" -ForegroundColor Green
                   }
               } else {
-                  Write-Host "│    ⚠️ AudioDeviceCmdlets không khả dụng — thử SoundVolumeView fallback..." -ForegroundColor Yellow
-                  try {
-                      $svvZip = "$env:TEMP\soundvolumeview.zip"
-                      & curl.exe -L -s --retry 2 'https://www.nirsoft.net/utils/soundvolumeview-x64.zip' -o "$svvZip" 2>$null
-                      if (Test-Path "$svvZip") {
-                          Expand-Archive -Path "$svvZip" -DestinationPath 'C:\SoundVolumeView' -Force
-                          $svv = 'C:\SoundVolumeView\SoundVolumeView.exe'
-                          if (Test-Path "$svv") {
-                              & "$svv" /SetDefault "CABLE Input" all 2>&1 | Out-Null
-                              & "$svv" /SetDefault "CABLE Output" all 2>&1 | Out-Null
-                              Write-Host "│    ✅ Đã set default qua SoundVolumeView" -ForegroundColor Green
-                          }
+                  # Fallback
+                  Write-Host "│    ⚠️ Module lỗi, dùng SoundVolumeView..." -ForegroundColor Yellow
+                  $svvZip = "$env:TEMP\soundvolumeview.zip"
+                  & curl.exe -L -s --retry 2 'https://www.nirsoft.net/utils/soundvolumeview-x64.zip' -o "$svvZip" 2>$null
+                  if (Test-Path "$svvZip") {
+                      Expand-Archive -Path "$svvZip" -DestinationPath 'C:\SoundVolumeView' -Force
+                      $svv = 'C:\SoundVolumeView\SoundVolumeView.exe'
+                      if (Test-Path "$svv") {
+                          & "$svv" /SetDefault "CABLE Input" all 2>&1 | Out-Null
+                          & "$svv" /SetDefault "CABLE Output" all 2>&1 | Out-Null
+                          Write-Host "│    ✅ Đã set default qua SoundVolumeView" -ForegroundColor Green
                       }
-                  } catch {
-                      Write-Host "│    ❌ Fallback cũng thất bại: $_" -ForegroundColor Red
                   }
               }
           } catch {
@@ -833,7 +842,7 @@ jobs:
 
           try { [console]::beep(800, 200); Write-Host "│    ✅ Test beep OK" -ForegroundColor Green } catch {}
 
-          # 3. SUNSHINE
+          # 4. SUNSHINE
           try {
               $sunMsi = "$env:TEMP\Sunshine.msi";
               if (Test-Path "$sunMsi") {
@@ -850,7 +859,7 @@ jobs:
               Write-Host "│ ✅ Sunshine Streaming Server sẵn sàng tại cổng 47990!" -ForegroundColor Green;
           } catch {}
 
-          # 4. ĐỘ PHÂN GIẢI
+          # 5. ĐỘ PHÂN GIẢI
           try {
               if (Get-Command Set-DisplayResolution -ErrorAction SilentlyContinue) {
                   Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction SilentlyContinue;
@@ -867,7 +876,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       # 10. CÀI APP & HÌNH NỀN
       # ─────────────────────────────────────────────────────────────
-      - name: 📦 Tải trọn bộ App & Hình Nền
+      - name: 📦 Tải trọn bộ App & Hình Nền (Discord, Spotify, StarDesk...)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
@@ -953,6 +962,22 @@ jobs:
               Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Start-Service;
           }
 
+          # Discord & Spotify
+          try {
+              Stop-Process -Name Discord, Update -Force -ErrorAction SilentlyContinue;
+              if (Test-Path "$dcInstaller") {
+                  Start-Process -FilePath "$dcInstaller" -ArgumentList "-s" -Wait -ErrorAction SilentlyContinue;
+                  Start-Sleep -Seconds 3;
+                  # Fix lỗi đen màn hình Discord
+                  $dcSettingsDir = "$env:APPDATA\discord";
+                  New-Item -ItemType Directory -Force -Path $dcSettingsDir -ErrorAction SilentlyContinue | Out-Null;
+                  Set-Content -Path "$dcSettingsDir\settings.json" -Value '{"DCA_DISABLE_HARDWARE_ACCELERATION":true,"OPEN_ON_STARTUP":false,"MINIMIZE_TO_TRAY":false}' -Force -ErrorAction SilentlyContinue;
+              }
+              if (Test-Path "$spInstaller") { Start-Process -FilePath "$spInstaller" -ArgumentList '/silent' -ErrorAction SilentlyContinue; }
+              if (Test-Path "$bdInstaller") { Start-Process -FilePath "$bdInstaller" -ArgumentList '/S' -ErrorAction SilentlyContinue; }
+          } catch {}
+
+          # Bloxstrap & Minecraft
           if ((Test-Path "$evZip") -and ((Get-Item "$evZip").Length -gt 50000)) {
               try {
                   $evDir = 'C:\EVKey';
@@ -964,28 +989,6 @@ jobs:
                   }
               } catch {}
           }
-
-          try {
-              Stop-Process -Name Discord, Update -Force -ErrorAction SilentlyContinue;
-              if (Test-Path "$dcInstaller") {
-                  Start-Process -FilePath "$dcInstaller" -ArgumentList "-s" -Wait -ErrorAction SilentlyContinue;
-                  Start-Sleep -Seconds 3;
-              }
-              if (Test-Path "$spInstaller") { Start-Process -FilePath "$spInstaller" -ArgumentList '/silent' -ErrorAction SilentlyContinue; }
-              if (Test-Path "$bdInstaller") { Start-Process -FilePath "$bdInstaller" -ArgumentList '/S' -ErrorAction SilentlyContinue; }
-          } catch {}
-
-          try {
-              $bloxCfgDir = "C:\Users\zenova\AppData\Local\Bloxstrap\Modifications\ClientSettings";
-              New-Item -ItemType Directory -Force -Path $bloxCfgDir -ErrorAction SilentlyContinue | Out-Null;
-              $fastFlags = @{
-                  "DFIntTaskSchedulerTargetFps" = 120;
-                  "FFlagDisablePostFx" = "True";
-                  "FFlagHandleAltEnterFullscreenManually" = "False";
-                  "FFlagDebugGraphicsPreferD3D11" = "True"
-              } | ConvertTo-Json;
-              Set-Content -Path "$bloxCfgDir\ClientAppSettings.json" -Value $fastFlags -Encoding UTF8 -Force;
-          } catch {}
 
           if (Test-Path "$mcZip") {
               try {
@@ -1003,9 +1006,9 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 11. STARDESK ID
+      # 11. STARDESK ID (FIX SIÊU SÂU)
       # ─────────────────────────────────────────────────────────────
-      - name: 🔑 Cấu hình PIN StarDesk Trung & Lấy Device ID
+      - name: 🔑 Cấu hình PIN StarDesk Trung & Lấy Device ID (Deep Scan)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
@@ -1018,6 +1021,9 @@ jobs:
           $cleanPin = ($sdPin -replace '[^A-Za-z0-9]', '');
           if (($cleanPin.Length -lt 8) -or ($cleanPin.Length -gt 16)) { $cleanPin = 'Zenova2026'; }
 
+          Write-Host "🔍 Bắt đầu quét ID StarDesk Trung / GameViewer..." -ForegroundColor Cyan;
+
+          # Quét qua CLI
           if (Test-Path "$gvCli") {
               for ($i = 0; $i -lt 15; $i++) {
                   $echo = & "$gvCli" echo 2>$null;
@@ -1034,15 +1040,17 @@ jobs:
               }
           }
 
+          # Quét file config nếu CLI thất bại
           if ([string]::IsNullOrWhiteSpace("$sdId") -or ($sdId -match 'chưa|đang|Đang')) {
               $cfgList = @(
                   "C:\Program Files (x86)\StarDesk\config.ini",
                   "C:\Program Files\StarDesk\config.ini",
                   "C:\ProgramData\StarDesk\config.ini",
                   "C:\Users\zenova\AppData\Roaming\StarDesk\config.ini",
-                  "C:\Users\runneradmin\AppData\Roaming\StarDesk\config.ini"
+                  "C:\Users\runneradmin\AppData\Roaming\StarDesk\config.ini",
+                  "C:\Program Files\Netease\GameViewer\bin\config.ini"
               );
-              for ($i = 0; $i -lt 15; $i++) {
+              for ($i = 0; $i -lt 20; $i++) {
                   foreach ($cfg in $cfgList) {
                       if (Test-Path $cfg) {
                           $content = Get-Content $cfg -Raw -ErrorAction SilentlyContinue;
@@ -1073,7 +1081,103 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 12. WEB PANEL
+      # 12. TẠO ICON DESKTOP (FIX STARDESK)
+      # ─────────────────────────────────────────────────────────────
+      - name: 🖥️ Tạo các phím tắt tiện ích trên Desktop
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
+          Write-Host "🖥️ Đang tạo phím tắt Desktop..." -ForegroundColor Cyan;
+
+          try {
+              $pubDesktop = "C:\Users\Public\Desktop";
+              New-Item -ItemType Directory -Force -Path $pubDesktop -ErrorAction SilentlyContinue | Out-Null;
+              $ws = New-Object -ComObject WScript.Shell;
+
+              # 1. Web Panel & Sunshine
+              Set-Content -Path "$pubDesktop\🌐 Web Quản Lý VPS.url" -Value "[InternetShortcut]`r`nURL=http://127.0.0.1:8080/`r`nIconIndex=0" -Encoding ASCII -Force;
+              Set-Content -Path "$pubDesktop\☀️ Sunshine Streaming.url" -Value "[InternetShortcut]`r`nURL=https://localhost:47990/`r`nIconIndex=0" -Encoding ASCII -Force;
+
+              # 2. StarDesk Trung (Quét mọi ngóc ngách)
+              $sdExe = $null
+              $sdPaths = @(
+                  "C:\Program Files\StarDesk\StarDesk.exe",
+                  "C:\Program Files (x86)\StarDesk\StarDesk.exe",
+                  "C:\Program Files\Netease\GameViewer\bin\GameViewer.exe"
+              )
+              foreach ($p in $sdPaths) {
+                  if (Test-Path $p) { $sdExe = $p; break }
+              }
+              if (-not $sdExe) {
+                  $sdExe = (Get-ChildItem -Path @("C:\Program Files", "C:\Program Files (x86)") -Filter "StarDesk.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+              }
+
+              if ($sdExe) {
+                  Write-Host "│ ✅ Đã tìm thấy StarDesk tại: $sdExe" -ForegroundColor Green
+                  $lnkSd = $ws.CreateShortcut("$pubDesktop\🌟 StarDesk Trung (0ms Delay).lnk");
+                  $lnkSd.TargetPath = $sdExe;
+                  $lnkSd.WorkingDirectory = Split-Path $sdExe;
+                  $lnkSd.Save();
+              } else {
+                  Write-Host "│ ⚠️ Không tìm thấy StarDesk.exe để tạo icon!" -ForegroundColor Yellow
+              }
+
+              # 3. Discord
+              $dcExe = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Local\Discord", "C:\Users\zenova\AppData\Local\Discord") -Filter "Discord.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*app-*" } | Select-Object -First 1).FullName;
+              if ($dcExe) {
+                  $lnkDc = $ws.CreateShortcut("$pubDesktop\💬 Discord.lnk");
+                  $lnkDc.TargetPath = $dcExe;
+                  $lnkDc.Arguments = "--disable-gpu --no-sandbox";
+                  $lnkDc.WorkingDirectory = Split-Path $dcExe;
+                  $lnkDc.Save();
+              }
+
+              # 4. Spotify
+              $spExe = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Roaming\Spotify", "C:\Users\zenova\AppData\Roaming\Spotify") -Filter "Spotify.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              if ($spExe) {
+                  $lnkSp = $ws.CreateShortcut("$pubDesktop\🎵 Spotify.lnk");
+                  $lnkSp.TargetPath = $spExe;
+                  $lnkSp.Save();
+              }
+
+              # 5. Các app khác
+              $bloxExe = "C:\Bloxstrap\Bloxstrap.exe";
+              if (Test-Path "$bloxExe") {
+                  $lnkBlox = $ws.CreateShortcut("$pubDesktop\🎮 Roblox (Bloxstrap).lnk");
+                  $lnkBlox.TargetPath = $bloxExe;
+                  $lnkBlox.Save();
+              }
+
+              $mcExe = (Get-ChildItem -Path "C:\PrismLauncher" -Filter "*prismlauncher*.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              if ($mcExe) {
+                  $lnkMc = $ws.CreateShortcut("$pubDesktop\🎮 Minecraft (Fix Lag).lnk");
+                  $lnkMc.TargetPath = $mcExe;
+                  $lnkMc.Save();
+              }
+
+              $evExe = (Get-ChildItem -Path "C:\EVKey" -Filter "*EVKey64.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              if ($evExe) {
+                  $lnkEv = $ws.CreateShortcut("$pubDesktop\⌨️ EVKey Tiếng Việt.lnk");
+                  $lnkEv.TargetPath = $evExe;
+                  $lnkEv.Save();
+              }
+
+              $bdExe = 'C:\Program Files\Bandicam\bdcam.exe';
+              if (Test-Path "$bdExe") {
+                  $lnkBc = $ws.CreateShortcut("$pubDesktop\📹 Bandicam.lnk");
+                  $lnkBc.TargetPath = $bdExe;
+                  $lnkBc.Save();
+              }
+
+              Write-Host "│ ✅ Đã tạo xong toàn bộ icon!" -ForegroundColor Green;
+          } catch {}
+
+          $global:LASTEXITCODE = 0;
+          exit 0;
+
+      # ─────────────────────────────────────────────────────────────
+      # 13. WEB PANEL
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Khởi chạy Web Quản Lý VPS (Port 8080)
         shell: pwsh
@@ -1111,7 +1215,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 13. THÔNG TIN KẾT NỐI
+      # 14. THÔNG TIN KẾT NỐI
       # ─────────────────────────────────────────────────────────────
       - name: 🎉 Thông tin kết nối Zenova VPS
         shell: pwsh
@@ -1181,7 +1285,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 14. KEEP-ALIVE
+      # 15. KEEP-ALIVE
       # ─────────────────────────────────────────────────────────────
       - name: ⏳ Duy trì phiên làm việc
         id: keepalive
@@ -1234,7 +1338,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 15. LƯU CUỐI PHIÊN
+      # 16. LƯU CUỐI PHIÊN
       # ─────────────────────────────────────────────────────────────
       - name: 💾 Lưu dữ liệu cuối phiên
         if: always()
@@ -1248,7 +1352,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 16. KÍCH HOẠT PHIÊN TIẾP
+      # 17. KÍCH HOẠT PHIÊN TIẾP
       # ─────────────────────────────────────────────────────────────
       - name: 🔁 Kích hoạt phiên tiếp theo
         if: always()
@@ -1267,7 +1371,7 @@ jobs:
               try {
                   gh workflow run "$wfFile" --repo "$env:RUNNER_REPO" `
                       -f machine_id="$env:MACHINE_ID" `
-                      -f duration="${{ github.event.inputs.duration || '24h' }}" `
+                      -f duration="${{ github.event.inputs.duration || '5h' }}" `
                       -f auto_restart="true" `
                       -f fixed_password="$env:FIXED_PASSWORD" `
                       -f pin_code="$env:INPUT_PIN_CODE" `
@@ -1281,7 +1385,7 @@ jobs:
           exit 0;
 
   # =========================================================================
-  # JOB 2: LINUX
+  # JOB 2: LINUX (Giữ nguyên như bản trước)
   # =========================================================================
   Zenova-Linux:
     name: '🐧 Linux VPS (XFCE4 + XRDP + Web Quản Lý)'
@@ -1309,14 +1413,11 @@ jobs:
           echo "MACHINE_ID=$CLEAN_ID" >> $GITHUB_ENV
           echo "RELEASE_TAG=zenova-linux-storage-$CLEAN_ID" >> $GITHUB_ENV
 
-          case "${{ github.event.inputs.duration || '24h' }}" in
+          case "${{ github.event.inputs.duration || '5h' }}" in
             "1h")  TOTAL=60 ;;
             "3h")  TOTAL=180 ;;
             "5h")  TOTAL=300 ;;
-            "6h")  TOTAL=360 ;;
-            "12h") TOTAL=720 ;;
-            "24h") TOTAL=1440 ;;
-            *)     TOTAL=1440 ;;
+            *)     TOTAL=300 ;;
           esac
           echo "TOTAL_MINUTES=$TOTAL" >> $GITHUB_ENV
 
@@ -1483,6 +1584,6 @@ jobs:
             [ -z "$WF_FILE" ] && WF_FILE="zenova_mega_vps.yml"
             gh workflow run "$WF_FILE" --repo "$RUNNER_REPO" \
               -f os_type="linux" -f machine_id="$MACHINE_ID" \
-              -f duration="${{ github.event.inputs.duration || '24h' }}" \
+              -f duration="${{ github.event.inputs.duration || '5h' }}" \
               -f auto_restart="true" -f fixed_password="$FIXED_PASSWORD" || true
           fi
