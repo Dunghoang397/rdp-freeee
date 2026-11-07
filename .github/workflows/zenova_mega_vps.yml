@@ -135,7 +135,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 🔎 Kiểm tra công cụ trên Windows host
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop';
           foreach ($tool in @('gh.exe', 'git.exe', 'curl.exe')) {
@@ -153,7 +153,7 @@ jobs:
       # 1. DỰNG Ổ ĐĨA RIÊNG & CHUẨN BỊ THÔNG SỐ (HỖ TRỢ LÊN ĐẾN 60TB)
       # ─────────────────────────────────────────────────────────────
       - name: 🧱 Dựng ổ đĩa riêng & Chuẩn bị thông số
-        shell: powershell
+        shell: pwsh
         env:
           INPUT_DURATION: ${{ github.event.inputs.duration || '5h' }}
         run: |
@@ -276,7 +276,7 @@ jobs:
       # 2. TẠO SCRIPT ĐÓNG GÓI & LƯU TRỮ DỮ LIỆU (SIÊU TỐC, KO TẮT MÁY)
       # ─────────────────────────────────────────────────────────────
       - name: 🧰 Tạo script đóng gói & lưu trữ dữ liệu
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -335,7 +335,7 @@ jobs:
       # 3. TẠO SCRIPT ĐỒNG BỘ TRẠNG THÁI MÁY LÊN GIT (WEB PANEL DATA)
       # ─────────────────────────────────────────────────────────────
       - name: 🧰 Tạo script đồng bộ trạng thái máy lên Git
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -374,7 +374,7 @@ jobs:
       # 4. KHÔI PHỤC DỮ LIỆU TỪ GITHUB RELEASE
       # ─────────────────────────────────────────────────────────────
       - name: ♻️ Khôi phục dữ liệu từ GitHub Release
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -451,7 +451,7 @@ jobs:
       # 5. TẠO USER ZENOVA & TỐI ƯU WINDOWS AN TOÀN
       # ─────────────────────────────────────────────────────────────
       - name: ⚙️ Tạo User Zenova & tối ưu Windows an toàn
-        shell: powershell
+        shell: pwsh
         env:
           FIXED_PASS: ${{ github.event.inputs.fixed_password || '' }}
         run: |
@@ -524,7 +524,7 @@ jobs:
       # 6. LẤY PUBLIC IP CỦA MÁY
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Lấy Public IP của máy
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -554,7 +554,7 @@ jobs:
           version: latest
 
       - name: 🌐 Kiểm tra & Kết nối Tailscale Key (nếu chưa có OAuth)
-        shell: powershell
+        shell: pwsh
         continue-on-error: true
         run: |
           $ErrorActionPreference = 'Continue';
@@ -600,7 +600,7 @@ jobs:
       # 9. CÀI APOLLO CHÍNH CHỦ & MỞ CỔNG CHỈ TRONG TAILSCALE
       # ─────────────────────────────────────────────────────────────
       - name: 🚀 Cài Apollo chính chủ cho Moonlight
-        shell: powershell
+        shell:pwsh
         run: |
           $ErrorActionPreference = 'Stop';
           Write-Host '🚀 Đang tải Apollo từ kho phát hành chính thức...' -ForegroundColor Cyan;
@@ -665,7 +665,7 @@ jobs:
       # 10. TẢI TRỌN BỘ APP VÀO C:\Apps & DOWNLOADS (ĐÃ BỎ DISCORD)
       # ─────────────────────────────────────────────────────────────
       - name: 📦 Tải trọn bộ App vào C:\Apps và Downloads
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -818,7 +818,7 @@ jobs:
       # 10A. CÀI HÌNH NỀN MINECRAFT SUNSET MẶC ĐỊNH CHO MỌI USER
       # ─────────────────────────────────────────────────────────────
       - name: 🖼️ Cài hình nền Minecraft mặc định
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop';
           $source = Join-Path $env:GITHUB_WORKSPACE 'assets\minecraft-wallpaper.jpg';
@@ -856,7 +856,7 @@ jobs:
       # 11. MỞ STARDESK TRUNG & ĐỌC DEVICE ID THẬT
       # ─────────────────────────────────────────────────────────────
       - name: 🔑 Mở StarDesk 中文版 và nhận diện Device ID
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop';
           $dataDir = 'C:\ProgramData\Zenova';
@@ -942,7 +942,7 @@ jobs:
       # 12. TẠO ICON DESKTOP ĐẦY ĐỦ TIỆN ÍCH (FIX LỖI EMOJI TRONG TÊN FILE)
       # ─────────────────────────────────────────────────────────────
       - name: 🖥️ Tạo các phím tắt tiện ích trên Desktop
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -1008,7 +1008,7 @@ jobs:
       # 13. WEB QUẢN LÝ VPS CÓ MẬT KHẨU & CHỈ TRUY CẬP QUA TAILSCALE
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Khởi chạy Web Quản Lý VPS bảo mật
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop';
           $tsIp = if (Test-Path 'C:\tailscale-ip.txt') { (Get-Content 'C:\tailscale-ip.txt' -Raw).Trim() } else { '' };
@@ -1147,7 +1147,7 @@ jobs:
       # 14. THÔNG TIN KẾT NỐI ZENOVA VPS
       # ─────────────────────────────────────────────────────────────
       - name: 🎉 Thông tin kết nối Zenova VPS
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE = 0;
@@ -1210,7 +1210,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: ⏳ Duy trì phiên làm việc
         id: keepalive
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -1269,7 +1269,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: 💾 Lưu dữ liệu cuối phiên
         if: always()
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
@@ -1283,7 +1283,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────
       - name: 🔁 Kích hoạt phiên tiếp theo
         if: always()
-        shell: powershell
+        shell: pwsh
         env:
           AUTO_RESTART: ${{ github.event.inputs.auto_restart || true }}
         run: |
