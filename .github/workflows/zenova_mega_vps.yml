@@ -41,13 +41,13 @@ on:
         default: '60TB'
         type: string
       windows_image:
-        description: '🪟 Bản Windows (chọn windows-2025 hoặc windows-2022)'
+        description: '🪟 Bản Windows (khuyên dùng windows-2022 để 100% CPU Intel Xeon)'
         required: false
-        default: 'windows-2025'
+        default: 'windows-2022'
         type: choice
         options:
-          - 'windows-2025'
           - 'windows-2022'
+          - 'windows-2025'
       fixed_password:
         description: '🔐 Mật khẩu RDP / Sunshine / Windows cố định'
         required: false
@@ -64,7 +64,7 @@ on:
         default: ''
         type: string
       tailscale_authkey:
-        description: '🔑 Key Tailscale Auth (tskey-auth-... hoặc lưu trong Secret TAILSCALE_AUTHKEY / OAuth)'
+        description: '🔑 Key Tailscale Auth (tskey-auth-... hoặc lưu trong Secret TAILSCALE_AUTHKEY)'
         required: false
         default: ''
         type: string
@@ -89,11 +89,6 @@ on:
         required: false
         default: true
         type: boolean
-      enable_duckdns:
-        description: '🦆 Cập nhật DuckDNS'
-        required: false
-        default: true
-        type: boolean
       vdd_resolution:
         description: '🖥️ Độ phân giải màn hình ảo VDD'
         required: false
@@ -115,8 +110,8 @@ jobs:
   # ZENOVA WINDOWS RUNNER (INTEL XEON + SUNSHINE + STARDESK TRUNG + APPS)
   # =========================================================================
   Zenova-Windows:
-    name: '🪟 Windows VPS (RDP + Sunshine + StarDesk Trung)'
-    runs-on: ${{ github.event.inputs.windows_image || 'windows-2025' }}
+    name: '🪟 Windows VPS (Intel Xeon + Sunshine + StarDesk Trung)'
+    runs-on: ${{ github.event.inputs.windows_image || 'windows-2022' }}
     timeout-minutes: 355
 
     env:
@@ -132,7 +127,6 @@ jobs:
       VHD_SIZE_GB: ${{ github.event.inputs.vhd_size_gb || '60TB' }}
       WEB_PORT: '8080'
       SUNSHINE_WEB_PORT: '47990'
-      ENABLE_DUCKDNS: ${{ github.event.inputs.enable_duckdns || 'true' }}
       INPUT_PIN_CODE: ${{ github.event.inputs.pin_code || 'Zenova2026' }}
       STARDESK_ID_INPUT: ${{ github.event.inputs.stardesk_id_trung || '' }}
       TAILSCALE_KEY_INPUT: ${{ github.event.inputs.tailscale_authkey || secrets.TAILSCALE_AUTHKEY || '' }}
@@ -164,7 +158,6 @@ jobs:
           "STATE_BRANCH=$stateBranch" >> "$env:GITHUB_ENV";
           "ROOT_RELEASE_TAG=$rootRelTag" >> "$env:GITHUB_ENV";
 
-          # Hỗ trợ cấu hình thời gian linh hoạt (1h, 3h, 5h, 6h, 12h, 24h)
           $total = 300;
           $display = '5 giờ';
           switch ("$env:INPUT_DURATION") {
@@ -199,19 +192,19 @@ jobs:
           if ($rawSize -match '^(\d+)\s*TB$') {
               $tbValue = [int64]$Matches[1];
               $sizeBytes = $tbValue * 1TB;
-              Write-Host "📦 Phát hiện dung lượng: $tbValue TB" -ForegroundColor Cyan;
+              Write-Host "📦 Dung lượng cấu hình: $tbValue TB" -ForegroundColor Cyan;
           } elseif ($rawSize -match '^(\d+)\s*GB$') {
               $sizeBytes = ([int64]$Matches[1]) * 1GB;
-              Write-Host "📦 Phát hiện dung lượng: $($Matches[1]) GB" -ForegroundColor Cyan;
+              Write-Host "📦 Dung lượng cấu hình: $($Matches[1]) GB" -ForegroundColor Cyan;
           } elseif ($rawSize -match '^(\d+)$') {
               $sizeBytes = ([int64]$Matches[1]) * 1GB;
-              Write-Host "📦 Phát hiện dung lượng: $($Matches[1]) GB (mặc định)" -ForegroundColor Cyan;
+              Write-Host "📦 Dung lượng cấu hình: $($Matches[1]) GB (mặc định)" -ForegroundColor Cyan;
           }
 
           $maxBytes = 60TB;
           if ($sizeBytes -gt $maxBytes) {
               $sizeBytes = $maxBytes;
-              Write-Host "⚠️ Giới hạn tối đa 60TB!" -ForegroundColor Yellow;
+              Write-Host "⚠️ Giới hạn dung lượng tối đa 60TB!" -ForegroundColor Yellow;
           }
 
           Write-Host "💽 Đang khởi tạo ổ đĩa riêng ${dl}:\ ($(($sizeBytes / 1TB).ToString('0.##')) TB Dynamic VHDX)..." -ForegroundColor Cyan;
@@ -267,6 +260,7 @@ jobs:
 
       # ─────────────────────────────────────────────────────────────
       # 2. TẠO SCRIPT ĐÓNG GÓI & LƯU TRỮ DỮ LIỆU
+      # (LƯU Ý: manual-web-save TUYỆT ĐỐI KHÔNG TẮT MÁY, KHÔNG TẮT APP)
       # ─────────────────────────────────────────────────────────────
       - name: 🧰 Tạo script đóng gói & lưu trữ dữ liệu
         shell: pwsh
@@ -279,13 +273,16 @@ jobs:
               'param([string]$Reason = "manual")',
               '$ErrorActionPreference = "Continue";',
               '$global:LASTEXITCODE = 0;',
-              'Write-Host "💾 [$Reason] Đang đóng gói và lưu toàn bộ dữ liệu..." -ForegroundColor Cyan;',
-              '$appsToClose = @("chrome", "msedge", "brave", "firefox", "discord", "Spotify", "Bandicam", "EVKey", "RobloxPlayerBeta", "StarDesk", "GameViewer", "prismlauncher", "javaw", "Code");',
-              'foreach ($app in $appsToClose) {',
-              '    Get-Process -Name "$app*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;',
-              '    taskkill.exe /F /IM "$app*.exe" /T 2>$null | Out-Null;',
+              'Write-Host "💾 [$Reason] Đang tiến hành đóng gói và lưu trữ dữ liệu..." -ForegroundColor Cyan;',
+              '# CHỈ tắt app khi kết thúc phiên hoàn toàn (final-session-save hoặc restart). Khi lưu sớm qua Web Panel (manual-web-save) thì TUYỆT ĐỐI KHÔNG TẮT APP!',
+              'if ($Reason -ne "manual-web-save") {',
+              '    $appsToClose = @("chrome", "msedge", "brave", "firefox", "Spotify", "Bandicam", "EVKey", "RobloxPlayerBeta", "StarDesk", "GameViewer", "prismlauncher", "javaw", "Code");',
+              '    foreach ($app in $appsToClose) {',
+              '        Get-Process -Name "$app*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;',
+              '        taskkill.exe /F /IM "$app*.exe" /T 2>$null | Out-Null;',
+              '    };',
+              '    Start-Sleep -Seconds 2;',
               '};',
-              'Start-Sleep -Seconds 2;',
               '$stage = [System.IO.Path]::Combine("$env:VHD_CONTAINER", "save-stage");',
               'if (Test-Path "$stage") { Remove-Item -Path "$stage" -Recurse -Force -ErrorAction SilentlyContinue; }',
               'New-Item -ItemType Directory -Force -Path "$stage" -ErrorAction SilentlyContinue | Out-Null;',
@@ -314,7 +311,7 @@ jobs:
               '    $uploadArgs = @("release", "upload", "$env:RELEASE_TAG", "--repo", "$env:STORAGE_REPO", "--clobber", "$manifestPath");',
               '    foreach ($c in $chunks) { $uploadArgs += $c.FullName; }',
               '    & gh @uploadArgs 2>&1 | Out-Null;',
-              '    Write-Host "✅ Đã lưu xong $($chunks.Count) phân mảnh lên GitHub Release!" -ForegroundColor Green;',
+              '    Write-Host "✅ Đã lưu xong $($chunks.Count) phân mảnh dữ liệu lên GitHub Release [$env:RELEASE_TAG]!" -ForegroundColor Green;',
               '};',
               '$global:LASTEXITCODE = 0;'
           );
@@ -425,7 +422,7 @@ jobs:
           $global:LASTEXITCODE = 0;
 
           if ($isFirstRun) {
-              Write-Host "ℹ️ Máy [$env:MACHINE_ID] là máy mới! Tạo phiên làm việc mới..." -ForegroundColor Cyan;
+              Write-Host "ℹ️ Khởi tạo phiên làm việc mới cho máy [$env:MACHINE_ID]..." -ForegroundColor Cyan;
               'DATA_RESTORED=1' >> "$env:GITHUB_ENV";
               $global:LASTEXITCODE = 0;
               exit 0;
@@ -451,7 +448,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 5. TẠO USER ZENOVA & TỐI ƯU INTEL XEON TỐI THƯỢNG (FIX CPU 100% & FIX LAG)
+      # 5. TẠO USER ZENOVA & TỐI ƯU INTEL XEON TỐI THƯỢNG (CHỐNG LAG / DELAY)
       # ─────────────────────────────────────────────────────────────
       - name: ⚙️ Tạo User Zenova & Tối ưu CPU Intel Xeon (Fix CPU 100% & Fix Lag)
         shell: pwsh
@@ -475,7 +472,8 @@ jobs:
               New-Item -Path $dgPath -Force -ErrorAction SilentlyContinue | Out-Null;
               Set-ItemProperty -Path $dgPath -Name 'Enabled' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue;
               bcdedit /set hypervisorlaunchtype off 2>&1 | Out-Null;
-              Write-Host "│ ✅ Đã tắt HVCI!" -ForegroundColor Green;
+              bcdedit /set testsigning on 2>&1 | Out-Null;
+              Write-Host "│ ✅ Đã tắt HVCI & bật TestSigning cho Driver!" -ForegroundColor Green;
           } catch {}
 
           # 3. TẠO USER ZENOVA & RUNNERADMIN
@@ -556,7 +554,7 @@ jobs:
               Set-MpPreference -DisableRealtimeMonitoring $true -DisableBehaviorMonitoring $true -DisableIOAVProtection $true -DisableScriptScanning $true -ErrorAction SilentlyContinue;
           } catch {}
 
-          # Tắt các Service ngầm ngốn CPU máy chủ (Giữ nguyên Audiosrv để nghe âm thanh)
+          # Tắt các Service ngầm ngốn CPU máy chủ (Giữ nguyên Audiosrv & AudioEndpointBuilder)
           $servicesToKill = @(
               'WSearch', 'SysMain', 'wuauserv', 'UsoSvc', 'DiagTrack',
               'dmwappushservice', 'WerSvc', 'PcaSvc', 'DPS'
@@ -579,7 +577,9 @@ jobs:
               netsh int tcp set heuristics disabled 2>$null | Out-Null;
           } catch {}
 
-          # Mở RDP Server
+          # Bật âm thanh trong Terminal Services & RDP
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'fDisableAudioCapture' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue;
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name 'fDisableAudioCapture' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue;
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name 'fDenyTSConnections' -Value 0 -Force -ErrorAction SilentlyContinue;
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'UserAuthentication' -Value 0 -Force -ErrorAction SilentlyContinue;
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name 'SecurityLayer' -Value 0 -Force -ErrorAction SilentlyContinue;
@@ -621,7 +621,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 7. KẾT NỐI TAILSCALE (OAUTH + KEY CLI DỰ PHÒNG, PING THẤP NHẤT)
+      # 7. KẾT NỐI TAILSCALE (LẤY IP 100.x.x.x KẾT NỐI SUNSHINE & RDP)
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Kết nối Tailscale (Official GitHub Action - OAuth)
         uses: tailscale/github-action@v4
@@ -668,7 +668,7 @@ jobs:
               "TAILSCALE_IP=$tsIp" >> "$env:GITHUB_ENV";
               Set-Content -Path "C:\tailscale-ip.txt" -Value "$tsIp" -Force;
               Write-Host "│ 🎉 Tailscale OK! IP: $tsIp" -ForegroundColor Green;
-              [Console]::WriteLine("::notice title=TAILSCALE IP SẴN SÀNG::IP: $tsIp | RDP: $tsIp:3389");
+              [Console]::WriteLine("::notice title=TAILSCALE IP SẴN SÀNG::IP: $tsIp | RDP: $tsIp:3389 | Sunshine: https://$tsIp:47990");
           } else {
               Write-Host "│ ⚠️ Tailscale chưa có IP (kiểm tra Secret OAuth hoặc TAILSCALE_AUTHKEY)" -ForegroundColor Yellow;
               Set-Content -Path "C:\tailscale-ip.txt" -Value "Chưa có IP" -Force;
@@ -719,28 +719,160 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 9. CÀI VDD + VB-CABLE + SUNSHINE (FIX WEB SUNSHINE & LOW LATENCY)
+      # 9. CÀI ĐẶT & KÍCH HOẠT CARD ÂM THANH ẢO (VB-CABLE ĐA TẦNG + SOUNDVOLUMEVIEW)
       # ─────────────────────────────────────────────────────────────
-      - name: 🖥️🔊☀️ Cài Driver Màn Hình Ảo, Âm Thanh Ảo & Sunshine (Fix Web Sunshine)
+      - name: 🔊 Cài đặt & Bật Card Âm Thanh Ảo (Fix 100% Không Có Âm Thanh)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          Write-Host "🖥️🔊 Cài Driver Ảo & Sunshine Streaming..." -ForegroundColor Cyan;
+          Write-Host "🔊 ĐANG CÀI ĐẶT & KÍCH HOẠT CARD ÂM THANH ẢO (VB-AUDIO CABLE)..." -ForegroundColor Yellow;
 
-          # Tải song song driver & Sunshine official msi
-          $dl7 = @(
-              '--url', 'https://www.amyuni.com/downloads/usbmmidd_v2.zip', '-o', "$env:TEMP\usbmmidd_v2.zip",
-              '--url', 'https://download.vb-audio.com/Download_EXTERNAL/VBCABLE_Driver_Pack43.zip', '-o', "$env:TEMP\VBCable.zip",
-              '--url', 'https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.msi', '-o', "$env:TEMP\Sunshine.msi"
-          );
-          & curl.exe -L -s --retry 2 -Z @dl7;
+          # 1. Bật toàn bộ Audio Services
+          @('MMCSS', 'AudioEndpointBuilder', 'Audiosrv') | ForEach-Object {
+              Set-Service -Name "$_" -StartupType Automatic -ErrorAction SilentlyContinue;
+              Start-Service -Name "$_" -ErrorAction SilentlyContinue;
+          };
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Audiosrv' -Name 'Start' -Value 2 -Type DWord -Force -ErrorAction SilentlyContinue;
 
-          # 1. MÀN HÌNH ẢO USBMMIDD v2
+          # 2. Tải và cài đặt VB-Cable qua gói chính thức
+          $vbDir = 'C:\VBCable';
+          $vbZip = "$env:TEMP\VBCable.zip";
+          New-Item -ItemType Directory -Force -Path $vbDir -ErrorAction SilentlyContinue | Out-Null;
+
           try {
-              $zip = "$env:TEMP\usbmmidd_v2.zip";
-              if (Test-Path "$zip") {
-                  Expand-Archive -Path $zip -DestinationPath 'C:\' -Force;
+              & curl.exe -L -s --retry 3 'https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip' -o "$vbZip" 2>$null;
+              if (-not (Test-Path "$vbZip")) {
+                  & curl.exe -L -s --retry 3 'https://download.vb-audio.com/Download_EXTERNAL/VBCABLE_Driver_Pack43.zip' -o "$vbZip" 2>$null;
+              }
+              if (Test-Path "$vbZip") {
+                  Expand-Archive -Path "$vbZip" -DestinationPath "$vbDir" -Force;
+                  
+                  # Cài đặt Driver qua pnputil
+                  $vbInf = Get-ChildItem -Path "$vbDir" -Filter '*64*.inf' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1;
+                  if (-not $vbInf) { $vbInf = Get-ChildItem -Path "$vbDir" -Filter '*.inf' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; }
+                  if ($vbInf) {
+                      & pnputil.exe /add-driver "$($vbInf.FullName)" /install /force 2>&1 | Out-Null;
+                  }
+
+                  # Chạy bộ cài đặt x64
+                  $vbSetup = Get-ChildItem -Path "$vbDir" -Filter 'VBCABLE_Setup_x64.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1;
+                  if ($vbSetup) {
+                      Start-Process -FilePath $vbSetup.FullName -ArgumentList "-i", "-h" -Wait -ErrorAction SilentlyContinue;
+                      Start-Sleep -Seconds 3;
+                  }
+              }
+          } catch {}
+
+          # Fallback Tầng 2: Cài qua Chocolatey nếu chưa nhận
+          $audioCheck = Get-PnpDevice -Class 'MEDIA','AudioEndpoint' -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'VB-Audio|CABLE' };
+          if (-not $audioCheck) {
+              Write-Host "│ 🔄 Dự phòng Tầng 2: Cài VB-Cable qua choco..." -ForegroundColor Cyan;
+              try { choco install vb-cable -y --no-progress --limit-output --ignore-checksums; } catch {}
+          }
+
+          & pnputil.exe /scan-devices 2>&1 | Out-Null;
+
+          # 3. Đặt VB-Cable làm thiết bị âm thanh mặc định qua SoundVolumeView
+          try {
+              $svvZip = "$env:TEMP\svv.zip";
+              & curl.exe -L -s --retry 2 'https://www.nirsoft.net/utils/soundvolumeview-x64.zip' -o "$svvZip" 2>$null;
+              if (Test-Path "$svvZip") {
+                  Expand-Archive -Path "$svvZip" -DestinationPath 'C:\SoundVolumeView' -Force;
+                  $svv = 'C:\SoundVolumeView\SoundVolumeView.exe';
+                  if (Test-Path "$svv") {
+                      & "$svv" /SetDefault "CABLE Input" all 2>&1 | Out-Null;
+                      & "$svv" /SetDefault "CABLE Output" all 2>&1 | Out-Null;
+                      & "$svv" /Unmute "CABLE Input" 2>&1 | Out-Null;
+                      & "$svv" /Unmute "CABLE Output" 2>&1 | Out-Null;
+                      Write-Host "│ ✅ Đã set VB-Cable làm thiết bị phát âm thanh mặc định!" -ForegroundColor Green;
+                  }
+              }
+          } catch {}
+
+          Restart-Service -Name 'Audiosrv' -Force -ErrorAction SilentlyContinue;
+          Restart-Service -Name 'AudioEndpointBuilder' -Force -ErrorAction SilentlyContinue;
+          Write-Host "✅ Card âm thanh ảo sẵn sàng!" -ForegroundColor Green;
+          $global:LASTEXITCODE = 0;
+          exit 0;
+
+      # ─────────────────────────────────────────────────────────────
+      # 10. CÀI ĐẶT SUNSHINE & FIX TRIỆT ĐỂ LỖI CSRF PROTECTION ERROR
+      # ─────────────────────────────────────────────────────────────
+      - name: ☀️ Cài đặt Sunshine & Fix Lỗi CSRF Protection Error (Hỗ trợ Tailscale IP & Cloudflare)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue';
+          $global:LASTEXITCODE   = 0;
+          Write-Host "☀️ ĐANG CÀI ĐẶT SUNSHINE & CẤU HÌNH FIX LỖI CSRF PROTECTION..." -ForegroundColor Yellow;
+
+          $sunMsi = "$env:TEMP\Sunshine.msi";
+          & curl.exe -L -s --retry 3 'https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.msi' -o "$sunMsi" 2>$null;
+
+          if (Test-Path "$sunMsi") {
+              Start-Process msiexec.exe -ArgumentList "/i `"$sunMsi`" /qn /norestart" -Wait;
+              Start-Sleep -Seconds 3;
+          }
+
+          $sunExe = 'C:\Program Files\Sunshine\sunshine.exe';
+          $pass = if ($env:FIXED_PASSWORD) { $env:FIXED_PASSWORD } else { "Zenova@2026" };
+
+          if (Test-Path "$sunExe") {
+              & "$sunExe" --creds zenova "$pass" 2>&1 | Out-Null;
+              Start-Sleep -Seconds 1;
+          }
+
+          # Cấu hình Sunshine: FIX TRIỆT ĐỂ LỖI CSRF BẰNG origin_web_ui_allowed & csrf_allowed_origins
+          $tsIp = if (Test-Path "C:\tailscale-ip.txt") { (Get-Content "C:\tailscale-ip.txt" -Raw).Trim() } else { "" };
+          $pubIp = if (Test-Path "C:\machine-ip.txt") { (Get-Content "C:\machine-ip.txt" -Raw).Trim() } else { "" };
+
+          $allowedOrigins = @(
+              "https://127.0.0.1:47990",
+              "https://localhost:47990"
+          );
+          if ($tsIp -and ($tsIp -match '^100\.')) {
+              $allowedOrigins += "https://$($tsIp):47990";
+          }
+          if ($pubIp -and ($pubIp -ne '127.0.0.1')) {
+              $allowedOrigins += "https://$($pubIp):47990";
+          }
+          $csrfOriginsStr = ($allowedOrigins | Select-Object -Unique) -join ',';
+
+          $sunCfgDir = "C:\Program Files\Sunshine\config";
+          New-Item -ItemType Directory -Force -Path $sunCfgDir -ErrorAction SilentlyContinue | Out-Null;
+
+          # Ghi cấu hình chuẩn chống CSRF & Low latency
+          $sunConfContent = @"
+          sunshine_name = Zenova-$($env:MACHINE_ID)
+          min_log_level = info
+          origin_web_ui_allowed = wan
+          origin_pin_allowed = wan
+          address_family = both
+          port = 47989
+          web_ui_port = 47990
+          upnp = disabled
+          encoder = nvenc
+          nvenc_preset = p1
+          latency = ultra_low
+          packet_size = 1024
+          fec_percentage = 20
+          fps = [60, 120]
+          csrf_allowed_origins = $csrfOriginsStr
+          "@ -replace '(?m)^\s+', '';
+
+          Set-Content -Path "$sunCfgDir\sunshine.conf" -Value $sunConfContent -Encoding UTF8 -Force;
+          Write-Host "│ ✅ Đã cấu hình sunshine.conf (origin_web_ui_allowed = wan, csrf_allowed_origins = $csrfOriginsStr)" -ForegroundColor Green;
+
+          # Mở Firewall Windows cho Sunshine
+          netsh advfirewall firewall add rule name="Sunshine_TCP" dir=in action=allow protocol=TCP localport=47984,47989,47990,48010 profile=any 2>&1 | Out-Null;
+          netsh advfirewall firewall add rule name="Sunshine_UDP" dir=in action=allow protocol=UDP localport=47998,47999,48000,48002,48010 profile=any 2>&1 | Out-Null;
+
+          # Cài đặt màn hình ảo VDD
+          try {
+              $vddZip = "$env:TEMP\usbmmidd_v2.zip";
+              & curl.exe -L -s --retry 2 'https://www.amyuni.com/downloads/usbmmidd_v2.zip' -o "$vddZip" 2>$null;
+              if (Test-Path "$vddZip") {
+                  Expand-Archive -Path "$vddZip" -DestinationPath 'C:\' -Force;
                   Push-Location 'C:\usbmmidd_v2';
                   Get-ChildItem -Filter '*.cer' | ForEach-Object {
                       Import-Certificate -FilePath ($_.FullName) -CertStoreLocation 'Cert:\LocalMachine\Root' *>$null;
@@ -753,263 +885,97 @@ jobs:
               }
           } catch {}
 
-          # 2. CÀI ĐẶT VB-CABLE AUDIO
-          Write-Host "│ 🔊 Đang cài đặt VB-Cable Audio Driver..." -ForegroundColor Cyan;
-          foreach ($svcName in @('Audiosrv', 'AudioEndpointBuilder', 'MMCSS')) {
-              try {
-                  Set-Service -Name $svcName -StartupType Automatic -ErrorAction SilentlyContinue;
-                  Start-Service -Name $svcName -ErrorAction SilentlyContinue;
-              } catch {}
-          }
+          # Khởi động dịch vụ Sunshine
+          Set-Service -Name 'SunshineService' -StartupType Automatic -ErrorAction SilentlyContinue;
+          Restart-Service -Name 'SunshineService' -Force -ErrorAction SilentlyContinue;
 
-          try { bcdedit /set testsigning on 2>&1 | Out-Null; } catch {}
-
-          try {
-              $vbZip = "$env:TEMP\VBCable.zip";
-              if (Test-Path "$vbZip") {
-                  if (Test-Path 'C:\VBCable') { Remove-Item 'C:\VBCable' -Recurse -Force -ErrorAction SilentlyContinue; }
-                  Expand-Archive -Path "$vbZip" -DestinationPath 'C:\VBCable' -Force;
-
-                  $vbSetup = Get-ChildItem -Path 'C:\VBCable' -Filter 'VBCABLE_Setup_x64.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1;
-                  if ($vbSetup) {
-                      Start-Process -FilePath $vbSetup.FullName -ArgumentList "-i", "-h" -Wait -ErrorAction SilentlyContinue;
-                      Start-Sleep -Seconds 5;
-                  }
-                  & pnputil.exe /scan-devices 2>&1 | Out-Null;
-              }
-          } catch {}
-
-          # SoundVolumeView set default device
-          try {
-              $svvZip = "$env:TEMP\soundvolumeview.zip";
-              & curl.exe -L -s --retry 2 'https://www.nirsoft.net/utils/soundvolumeview-x64.zip' -o "$svvZip" 2>$null;
-              if (Test-Path "$svvZip") {
-                  Expand-Archive -Path "$svvZip" -DestinationPath 'C:\SoundVolumeView' -Force;
-                  $svv = 'C:\SoundVolumeView\SoundVolumeView.exe';
-                  if (Test-Path "$svv") {
-                      & "$svv" /SetDefault "CABLE Input" all 2>&1 | Out-Null;
-                      & "$svv" /SetDefault "CABLE Output" all 2>&1 | Out-Null;
-                      Write-Host "│    ✅ Đã set default audio qua SoundVolumeView" -ForegroundColor Green;
-                  }
-              }
-          } catch {}
-
-          foreach ($svcName in @('AudioEndpointBuilder', 'Audiosrv')) {
-              try { Restart-Service -Name $svcName -Force -ErrorAction SilentlyContinue; } catch {}
-          }
-
-          # 3. FIX SUNSHINE STREAMING & WEB UI CẤU HÌNH
-          Write-Host "│ ☀️ Cấu hình Sunshine Server & Mở Firewall..." -ForegroundColor Cyan;
-          try {
-              $sunMsi = "$env:TEMP\Sunshine.msi";
-              if (Test-Path "$sunMsi") {
-                  Start-Process msiexec.exe -ArgumentList "/i `"$sunMsi`" /qn /norestart" -Wait;
-                  Start-Sleep -Seconds 3;
-              }
-              $sunshineExe = 'C:\Program Files\Sunshine\sunshine.exe';
-              $pass = "$env:FIXED_PASSWORD";
-              if (-not $pass) { $pass = "Zenova@2026"; }
-              
-              if (Test-Path "$sunshineExe") {
-                  & "$sunshineExe" --creds zenova "$pass" 2>&1 | Out-Null;
-                  Start-Sleep -Seconds 1;
-              }
-
-              # Cấu hình Sunshine ultra low latency
-              $sunDir = "C:\Program Files\Sunshine\config";
-              New-Item -ItemType Directory -Force -Path $sunDir -ErrorAction SilentlyContinue | Out-Null;
-              $sunConf = "origin_pin_allowed = pc`r`nupnp = disabled`r`nencoder = nvenc`r`nnvenc_preset = p1`r`nlatency = ultra_low`r`npacket_size = 1024`r`nfec_percentage = 20`r`nfps = [60, 120]`r`n";
-              Set-Content -Path "$sunDir\sunshine.conf" -Value $sunConf -Encoding UTF8 -Force;
-
-              # Mở Port Firewall cho Sunshine
-              netsh advfirewall firewall add rule name="Sunshine_TCP" dir=in action=allow protocol=TCP localport=47984,47989,47990,48010 2>&1 | Out-Null;
-              netsh advfirewall firewall add rule name="Sunshine_UDP" dir=in action=allow protocol=UDP localport=47998,47999,48000,48002,48010 2>&1 | Out-Null;
-
-              Set-Service -Name 'SunshineService' -StartupType Automatic -ErrorAction SilentlyContinue;
-              Restart-Service -Name 'SunshineService' -Force -ErrorAction SilentlyContinue;
-              Write-Host "│ ✅ Sunshine Streaming Server sẵn sàng tại cổng 47990!" -ForegroundColor Green;
-          } catch {}
-
-          # 4. ĐỘ PHÂN GIẢI
-          try {
-              if (Get-Command Set-DisplayResolution -ErrorAction SilentlyContinue) {
-                  Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction SilentlyContinue;
-              }
-              Get-ChildItem -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Video' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '0000$' } | ForEach-Object {
-                  Set-ItemProperty -Path $_.PSPath -Name 'DefaultSettings.XResolution' -Value 1920 -Type DWord -Force -ErrorAction SilentlyContinue;
-                  Set-ItemProperty -Path $_.PSPath -Name 'DefaultSettings.YResolution' -Value 1080 -Type DWord -Force -ErrorAction SilentlyContinue;
-              };
-          } catch {}
-
+          Write-Host "✅ Sunshine Server đã khởi chạy thành công!" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 10. TẢI TRỌN BỘ APP & PRELOAD FILE TỪ DOWNLOADS\APP VÀO ALL MÁY
+      # 11. TẢI TOÀN BỘ FILE TỪ DOWNLOADS\APP VÀO Ổ C (KHÔNG XOÁ BẤT KỲ GÌ)
+      # (BỎ TẢI DISCORD WEB TRÁNH LỖI VÌ ĐÃ CÓ DISCORDSETUP TRONG APP)
       # ─────────────────────────────────────────────────────────────
-      - name: 📦 Tải trọn bộ App & Preload Apps từ Downloads\app vào all máy
+      - name: 📦 Tải toàn bộ file từ Downloads\app vào C:\Users\...\Downloads (Ổ C)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          Write-Host "📦 ĐANG TẢI & CÀI ĐẶT TRỌN BỘ ỨNG DỤNG CHO ALL MÁY..." -ForegroundColor Cyan;
-          
-          $dl = "$env:MOUNT_LETTER";
-          $allDownloadFolders = @(
+          Write-Host "📦 ĐANG TẢI & SAO CHÉP TOÀN BỘ ỨNG DỤNG VÀO THƯ MỤC DOWNLOADS Ổ C..." -ForegroundColor Cyan;
+
+          # Thư mục Downloads trên Ổ C của tất cả User
+          $targetDownloadFolders = @(
               "C:\Users\zenova\Downloads",
               "C:\Users\runneradmin\Downloads",
-              "${dl}:\Downloads",
               "C:\Apps"
           );
-          foreach ($f in $allDownloadFolders) {
+          foreach ($f in $targetDownloadFolders) {
               New-Item -ItemType Directory -Force -Path $f -ErrorAction SilentlyContinue | Out-Null;
           }
-          New-Item -ItemType Directory -Force -Path 'C:\Bloxstrap', 'C:\EVKey', 'C:\PrismLauncher', 'C:\Program Files (x86)\StarDesk', 'C:\Windows\Web\Wallpaper' -ErrorAction SilentlyContinue | Out-Null;
 
-          # 1. TẢI TOÀN BỘ FILE TỪ BUNDLE GITHUB RELEASE 'zenova-apps' VÀO DOWNLOADS
+          # 1. Tải trọn vẹn toàn bộ 9 file từ Release Bundle 'zenova-apps'
           try {
               $bundleDir = "$env:TEMP\zenova-apps-bundle";
-              New-Item -ItemType Directory -Force -Path $bundleDir -ErrorAction SilentlyContinue | Out-Null;
+              New-Item -ItemType Directory -Force -Path "$bundleDir" -ErrorAction SilentlyContinue | Out-Null;
               & gh release download zenova-apps --repo "$env:RUNNER_REPO" --dir "$bundleDir" 2>&1 | Out-Null;
               if (Test-Path "$bundleDir") {
                   Get-ChildItem -Path "$bundleDir" | ForEach-Object {
                       $file = $_;
-                      foreach ($df in $allDownloadFolders) {
+                      foreach ($df in $targetDownloadFolders) {
                           Copy-Item -Path $file.FullName -Destination $df -Force -ErrorAction SilentlyContinue;
                       }
                   }
-                  Write-Host "│ ✅ Đã tải và sao chép toàn bộ file app (Antigravity, AutoClicker, CloudCord, Store...) vào thư mục Downloads của tất cả user!" -ForegroundColor Green;
+                  Write-Host "│ ✅ Đã nạp thành công trọn bộ file (Antigravity, AutoClicker, CloudCord, DiscordSetup, Store, VSCode, Windhawk, Wallpapers...) vào Downloads ổ C của tất cả máy!" -ForegroundColor Green;
               }
           } catch {
-              Write-Host "│ ⚠️ Lỗi khi tải release bundle (Bỏ qua)" -ForegroundColor Yellow;
+              Write-Host "│ ⚠️ Lỗi tải release bundle: $($_.Exception.Message)" -ForegroundColor Yellow;
           }
 
-          # 2. TẢI SONG SONG CÁC APP CHÍNH QUA CDN TỐC ĐỘ CAO
-          $wpFile       = "C:\Windows\Web\Wallpaper\Zenova.png";
-          $sdInstaller  = 'C:\StarDesk_1.5.3.exe';
-          $gvInstaller  = 'C:\uuyc_4.43.1.exe';
-          $evZip        = "$env:TEMP\EVKey.zip";
-          $dcInstaller  = "$env:TEMP\DiscordSetup.exe";
-          $spInstaller  = "$env:TEMP\SpotifySetup.exe";
-          $bdInstaller  = "$env:TEMP\bdcamsetup.exe";
-          $bloxExe      = 'C:\Bloxstrap\Bloxstrap.exe';
-          $mcZip        = "$env:TEMP\PrismLauncher.zip";
-          $net8Exe      = "$env:TEMP\dotnet8.exe";
-          $vcExe        = "$env:TEMP\vcredist_x64.exe";
-          $vsCodeSetup  = "C:\Users\zenova\Downloads\VSCodeUserSetup-x64.exe";
-          $windhawkExe  = "C:\Users\zenova\Downloads\windhawk_setup.exe";
-          $autoClickExe = "C:\Users\zenova\Downloads\AutoClicker.exe";
+          # 2. Tải thêm Bloxstrap 120 FPS, Minecraft PrismLauncher, Spotify, Bandicam, EVKey
+          $bloxExe   = 'C:\Bloxstrap\Bloxstrap.exe';
+          $mcZip     = "$env:TEMP\PrismLauncher.zip";
+          $spExe     = "$env:TEMP\SpotifySetup.exe";
+          $bdExe     = "$env:TEMP\bdcamsetup.exe";
+          $evZip     = "$env:TEMP\EVKey.zip";
+          $net8Exe   = "$env:TEMP\dotnet8.exe";
+          $vcExe     = "$env:TEMP\vcredist_x64.exe";
+          $wpFile    = "C:\Windows\Web\Wallpaper\Zenova.png";
+
+          New-Item -ItemType Directory -Force -Path 'C:\Bloxstrap', 'C:\EVKey', 'C:\PrismLauncher', 'C:\Windows\Web\Wallpaper' -ErrorAction SilentlyContinue | Out-Null;
 
           $parallelDownloads = @(
               '--url', 'https://raw.githubusercontent.com/Dunghoang397/rdp-freeee/2715203b1462985959767187a585efb637441f9f/Zenova%20Cloud%20Aurora%20Lake.png', '-o', "$wpFile",
-              '--url', 'https://github.com/ddvdat-glitch/abcd/releases/download/app/StarDesk_1.5.3.exe', '-o', "$sdInstaller",
-              '--url', 'https://github.com/ddvdat-glitch/abcd/releases/download/app/uuyc_4.43.1.exe', '-o', "$gvInstaller",
-              '--url', 'https://github.com/lamquangminh/EVKey/releases/download/Release/EVKey.zip', '-o', "$evZip",
-              '--url', 'https://aka.ms/vs/17/release/vc_redist.x64.exe', '-o', "$vcExe",
-              '--url', 'https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe', '-o', "$net8Exe",
               '--url', 'https://github.com/bloxstraplabs/bloxstrap/releases/download/v2.7.0/Bloxstrap-v2.7.0.exe', '-o', "$bloxExe",
               '--url', 'https://github.com/Diegiwg/PrismLauncher-Cracked/releases/download/11.0.3/PrismLauncher-Windows-MSVC-Portable-11.0.3.zip', '-o', "$mcZip",
-              '--url', 'https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64', '-o', "$dcInstaller",
-              '--url', 'https://download.scdn.co/SpotifySetup.exe', '-o', "$spInstaller",
-              '--url', 'https://dl.bandicam.com/bdcamsetup.exe', '-o', "$bdInstaller",
-              '--url', 'https://update.code.visualstudio.com/latest/win32-x64-user/stable', '-o', "$vsCodeSetup",
-              '--url', 'https://github.com/ramensoftware/windhawk/releases/download/v1.5.1/windhawk_setup.exe', '-o', "$windhawkExe",
-              '--url', 'https://github.com/chrisd1100/OP-AutoClicker/releases/download/v4.0/OPAutoClicker.exe', '-o', "$autoClickExe"
+              '--url', 'https://download.scdn.co/SpotifySetup.exe', '-o', "$spExe",
+              '--url', 'https://dl.bandicam.com/bdcamsetup.exe', '-o', "$bdExe",
+              '--url', 'https://github.com/lamquangminh/EVKey/releases/download/Release/EVKey.zip', '-o', "$evZip",
+              '--url', 'https://aka.ms/vs/17/release/vc_redist.x64.exe', '-o', "$vcExe",
+              '--url', 'https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe', '-o', "$net8Exe"
           );
           & curl.exe -L -s --retry 2 -Z @parallelDownloads;
 
-          # Sao chép các file vừa tải vào all Downloads folders
-          foreach ($appPath in @("$vsCodeSetup", "$windhawkExe", "$autoClickExe", "$bloxExe")) {
-              if (Test-Path $appPath) {
-                  Copy-Item -Path $appPath -Destination "C:\Users\runneradmin\Downloads\" -Force -ErrorAction SilentlyContinue;
-                  Copy-Item -Path $appPath -Destination "${dl}:\Downloads\" -Force -ErrorAction SilentlyContinue;
-                  Copy-Item -Path $appPath -Destination "C:\Apps\" -Force -ErrorAction SilentlyContinue;
-              }
-          }
-
-          # Hình nền
-          if (Test-Path "$wpFile") {
-              try {
-                  $winWp = "C:\Windows\Web\Wallpaper\Windows\img0.jpg";
-                  takeown /f "$winWp" /a *> $null;
-                  icacls "$winWp" /grant Everyone:F *> $null;
-                  Copy-Item -Path "$wpFile" -Destination "$winWp" -Force -ErrorAction SilentlyContinue;
-                  $policyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization';
-                  New-Item -Path "$policyPath" -Force -ErrorAction SilentlyContinue | Out-Null;
-                  Set-ItemProperty -Path "$policyPath" -Name 'LockScreenImage' -Value "$wpFile" -Force -ErrorAction SilentlyContinue;
-                  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value "$wpFile" -Force -ErrorAction SilentlyContinue;
-                  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name WallpaperStyle -Value "10" -Force -ErrorAction SilentlyContinue;
-              } catch {}
-          }
-
-          # .NET 8 & VC++
+          # Cài đặt ngầm .NET 8, VC++, Bloxstrap, EVKey, Spotify, Bandicam
           try {
               if (Test-Path "$vcExe") { Start-Process -FilePath "$vcExe" -ArgumentList "/install /quiet /norestart" -Wait -ErrorAction SilentlyContinue; }
               if (Test-Path "$net8Exe") { Start-Process -FilePath "$net8Exe" -ArgumentList "/install /quiet /norestart" -Wait -ErrorAction SilentlyContinue; }
+              if (Test-Path "$spExe") { Start-Process -FilePath "$spExe" -ArgumentList "/silent" -ErrorAction SilentlyContinue; }
+              if (Test-Path "$bdExe") { Start-Process -FilePath "$bdExe" -ArgumentList "/S" -ErrorAction SilentlyContinue; }
           } catch {}
 
-          # CÀI ĐẶT & FIX KẾT NỐI STARDESK TRUNG + GAMEVIEWER
-          $pin = "$env:INPUT_PIN_CODE";
-          if (-not $pin) { $pin = "Zenova2026"; }
-          $cleanPin = ($pin -replace '[^A-Za-z0-9]', '');
-          if (($cleanPin.Length -lt 8) -or ($cleanPin.Length -gt 16)) { $cleanPin = 'Zenova2026'; }
-
-          if (Test-Path "$gvInstaller") {
-              Start-Process -FilePath "$gvInstaller" -ArgumentList '/S' -Wait -ErrorAction SilentlyContinue;
-              Get-Service -Name '*GameViewer*' -ErrorAction SilentlyContinue | Set-Service -StartupType Automatic;
-              Get-Service -Name '*GameViewer*' -ErrorAction SilentlyContinue | Start-Service;
-              $gvServer = 'C:\Program Files\Netease\GameViewer\bin\GameViewerServer.exe';
-              if (Test-Path "$gvServer") { Start-Process "$gvServer" -WorkingDirectory 'C:\Program Files\Netease\GameViewer\bin' -WindowStyle Hidden -ErrorAction SilentlyContinue; }
-          }
-
-          if (Test-Path "$sdInstaller") {
-              Start-Process -FilePath "$sdInstaller" -ArgumentList '/S' -Wait -ErrorAction SilentlyContinue;
-              # Giải nén trực tiếp bằng 7z để đảm bảo đầy đủ file và DLL
-              & 7z x "$sdInstaller" "-oC:\Program Files (x86)\StarDesk" -y *>$null;
-              & 7z x "$sdInstaller" "-oC:\Program Files\StarDesk" -y *>$null;
-
-              $cfgData = "[General]`r`nPassword=$cleanPin`r`nAutoStart=1`r`n";
-              foreach ($dir in @("C:\Program Files (x86)\StarDesk", "C:\Program Files\StarDesk", "C:\ProgramData\StarDesk", "C:\Users\zenova\AppData\Roaming\StarDesk", "C:\Users\runneradmin\AppData\Roaming\StarDesk")) {
-                  New-Item -ItemType Directory -Force -Path $dir -ErrorAction SilentlyContinue | Out-Null;
-                  Set-Content -Path "$dir\config.ini" -Value $cfgData -Encoding ASCII -Force -ErrorAction SilentlyContinue;
-              }
-
-              Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Set-Service -StartupType Automatic;
-              Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Start-Service;
-
-              # KHỞI CHẠY TIẾN TRÌNH STARDESK.EXE ĐỂ KẾT NỐI SERVER VÀ LẤY DEVICE ID
-              $sdExe = (Get-ChildItem -Path @("C:\Program Files\StarDesk", "C:\Program Files (x86)\StarDesk") -Filter "StarDesk.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
-              if ($sdExe) {
-                  Start-Process -FilePath "$sdExe" -WorkingDirectory (Split-Path $sdExe) -WindowStyle Hidden -ErrorAction SilentlyContinue;
-                  Write-Host "│ ✅ Đã khởi chạy tiến trình StarDesk.exe" -ForegroundColor Green;
-              }
-          }
-
-          # EVKey
           if ((Test-Path "$evZip") -and ((Get-Item "$evZip").Length -gt 50000)) {
               try {
-                  $evDir = 'C:\EVKey';
-                  Expand-Archive -Path "$evZip" -DestinationPath "$evDir" -Force;
-                  $evExe = "$evDir\EVKey64.exe";
+                  Expand-Archive -Path "$evZip" -DestinationPath 'C:\EVKey' -Force;
+                  $evExe = 'C:\EVKey\EVKey64.exe';
                   if (Test-Path "$evExe") {
-                      Start-Process -FilePath "$evExe" -WorkingDirectory "$evDir" -ErrorAction SilentlyContinue;
+                      Start-Process -FilePath "$evExe" -WorkingDirectory 'C:\EVKey' -ErrorAction SilentlyContinue;
                       Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'EVKey' -Value "`"$evExe`"" -Force -ErrorAction SilentlyContinue;
                   }
               } catch {}
           }
 
-          # Discord, Spotify, Bandicam
-          try {
-              Stop-Process -Name Discord, Update -Force -ErrorAction SilentlyContinue;
-              if (Test-Path "$dcInstaller") {
-                  Start-Process -FilePath "$dcInstaller" -ArgumentList "-s" -Wait -ErrorAction SilentlyContinue;
-                  Start-Sleep -Seconds 3;
-              }
-              if (Test-Path "$spInstaller") { Start-Process -FilePath "$spInstaller" -ArgumentList '/silent' -ErrorAction SilentlyContinue; }
-              if (Test-Path "$bdInstaller") { Start-Process -FilePath "$bdInstaller" -ArgumentList '/S' -ErrorAction SilentlyContinue; }
-          } catch {}
-
-          # Bloxstrap Fix Lag Direct3D 11 & 120 FPS
+          # Bloxstrap ClientAppSettings.json (Direct3D 11, 120 FPS)
           try {
               $bloxCfgDir = "C:\Users\zenova\AppData\Local\Bloxstrap\Modifications\ClientSettings";
               New-Item -ItemType Directory -Force -Path $bloxCfgDir -ErrorAction SilentlyContinue | Out-Null;
@@ -1022,83 +988,164 @@ jobs:
               Set-Content -Path "$bloxCfgDir\ClientAppSettings.json" -Value $fastFlags -Encoding UTF8 -Force;
           } catch {}
 
-          # Minecraft PrismLauncher
           if (Test-Path "$mcZip") {
+              try { Expand-Archive -Path "$mcZip" -DestinationPath 'C:\PrismLauncher' -Force; } catch {}
+          }
+
+          # Hình nền
+          if (Test-Path "$wpFile") {
               try {
-                  $mcDir = 'C:\PrismLauncher';
-                  Expand-Archive -Path "$mcZip" -DestinationPath "$mcDir" -Force;
+                  $winWp = "C:\Windows\Web\Wallpaper\Windows\img0.jpg";
+                  takeown /f "$winWp" /a *> $null;
+                  icacls "$winWp" /grant Everyone:F *> $null;
+                  Copy-Item -Path "$wpFile" -Destination "$winWp" -Force -ErrorAction SilentlyContinue;
+                  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value "$wpFile" -Force -ErrorAction SilentlyContinue;
+                  Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name WallpaperStyle -Value "10" -Force -ErrorAction SilentlyContinue;
               } catch {}
           }
 
-          if ("$env:CHOCO_PACKAGES") {
-              try { choco install "$env:CHOCO_PACKAGES" -y --no-progress --limit-output; } catch {}
-          }
-
-          Write-Host "✅ Toàn bộ ứng dụng đã được tải và cài đặt hoàn tất!" -ForegroundColor Green;
+          Write-Host "✅ Đã nạp đầy đủ toàn bộ ứng dụng!" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 11. FIX KẾT NỐI STARDESK TRUNG & LẤY DEVICE ID THỰC
+      # 12. CÀI ĐẶT & KHỞI CHẠY STARDESK TRUNG + GAMEVIEWER & TRÍCH XUẤT DEVICE ID
       # ─────────────────────────────────────────────────────────────
-      - name: 🔑 Cấu hình PIN StarDesk Trung & Lấy Device ID
+      - name: 🎮 Cài đặt, Khởi chạy NetEase GameViewer & StarDesk & Trích xuất Device ID & PIN
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          Write-Host "🔍 Đang trích xuất ID StarDesk Trung / GameViewer..." -ForegroundColor Cyan;
-          
-          $gvCli = 'C:\Program Files\Netease\GameViewer\bin\uuyc-cli.exe';
-          $sdId = "$env:STARDESK_ID_INPUT";
-          $sdPin = "$env:INPUT_PIN_CODE";
-          if ([string]::IsNullOrWhiteSpace("$sdPin")) { $sdPin = "Zenova2026"; }
-          $cleanPin = ($sdPin -replace '[^A-Za-z0-9]', '');
+          Write-Host "🎮 ĐANG CÀI ĐẶT & KẾT NỐI STARDESK TRUNG & GAMEVIEWER..." -ForegroundColor Yellow;
+
+          $user = "$env:RDP_USER";
+          $gvUrl1 = 'https://github.com/ddvdat-glitch/abcd/releases/download/app/uuyc_4.43.1.exe';
+          $gvUrl2 = 'https://a56.gdl.netease.com/UURemote_Setup_4.43.1.3614_1016022822_gwqd.exe?key1=11cbe230b9ef214e4fa2470aabab147d&key2=6ad577fc&n=uuyc_4.43.1.exe';
+          $gvInstaller = 'C:\uuyc_4.43.1.exe';
+
+          $sdUrl = 'https://github.com/ddvdat-glitch/abcd/releases/download/app/StarDesk_1.5.3.exe';
+          $sdInstaller = 'C:\StarDesk_1.5.3.exe';
+
+          # Tải GameViewer & StarDesk
+          & curl.exe -L -s --retry 3 --connect-timeout 20 -A "Mozilla/5.0" "$gvUrl1" -o "$gvInstaller" 2>$null;
+          if ((-not (Test-Path "$gvInstaller")) -or ((Get-Item "$gvInstaller").Length -lt 5MB)) {
+              & curl.exe -L -s --retry 3 --connect-timeout 20 -A "Mozilla/5.0" "$gvUrl2" -o "$gvInstaller" 2>$null;
+          }
+          & curl.exe -L -s --retry 3 --connect-timeout 20 -A "Mozilla/5.0" "$sdUrl" -o "$sdInstaller" 2>$null;
+
+          # 1. CÀI ĐẶT & KHỞI CHẠY GAMEVIEWER
+          if ((Test-Path "$gvInstaller") -and ((Get-Item "$gvInstaller").Length -gt 5MB)) {
+              Get-Service -Name '*GameViewer*' -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue;
+              Get-Process -Name 'GameViewer*' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;
+              Start-Process -FilePath "$gvInstaller" -ArgumentList '/S' -Wait;
+              Start-Sleep -Seconds 3;
+          }
+
+          Get-Service -Name '*GameViewer*' -ErrorAction SilentlyContinue | ForEach-Object {
+              Set-Service -Name ($_.Name) -StartupType Automatic -ErrorAction SilentlyContinue;
+              Start-Service -Name ($_.Name) -ErrorAction SilentlyContinue;
+          };
+
+          $gvAppDir    = 'C:\Program Files\Netease\GameViewer\bin';
+          $gvServerExe = 'C:\Program Files\Netease\GameViewer\bin\GameViewerServer.exe';
+          $gvAppExe    = 'C:\Program Files\Netease\GameViewer\bin\GameViewer.exe';
+          $gvCli       = 'C:\Program Files\Netease\GameViewer\bin\uuyc-cli.exe';
+
+          if (Test-Path "$gvServerExe") {
+              Start-Process -FilePath "$gvServerExe" -WorkingDirectory "$gvAppDir" -WindowStyle Hidden -ErrorAction SilentlyContinue;
+          }
+          if (Test-Path "$gvAppExe") {
+              try {
+                  & schtasks.exe /Create /TN "AISTV-Launch-GameViewer" /TR "`"$gvAppExe`"" /SC ONCE /ST 00:00 /RU "$user" /RL HIGHEST /IT /F *> $null;
+                  & schtasks.exe /Run /TN "AISTV-Launch-GameViewer" *> $null;
+              } catch {}
+              Start-Process -FilePath "$gvAppExe" -WorkingDirectory "$gvAppDir" -WindowStyle Hidden -ErrorAction SilentlyContinue;
+          }
+
+          # 2. CÀI ĐẶT & KHỞI CHẠY STARDESK TRUNG
+          if ((Test-Path "$sdInstaller") -and ((Get-Item "$sdInstaller").Length -gt 5MB)) {
+              Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | Stop-Service -Force -ErrorAction SilentlyContinue;
+              Get-Process -Name 'StarDesk*' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;
+              Start-Process -FilePath "$sdInstaller" -ArgumentList '/S' -Wait;
+              & 7z x "$sdInstaller" "-oC:\Program Files\StarDesk" -y *>$null;
+              Start-Sleep -Seconds 3;
+          }
+
+          Get-Service -Name '*StarDesk*' -ErrorAction SilentlyContinue | ForEach-Object {
+              Set-Service -Name ($_.Name) -StartupType Automatic -ErrorAction SilentlyContinue;
+              Start-Service -Name ($_.Name) -ErrorAction SilentlyContinue;
+          };
+
+          $sdAppExe = 'C:\Program Files\StarDesk\StarDesk.exe';
+          if (Test-Path "$sdAppExe") {
+              try {
+                  & schtasks.exe /Create /TN "AISTV-Launch-StarDesk" /TR "`"$sdAppExe`"" /SC ONCE /ST 00:00 /RU "$user" /RL HIGHEST /IT /F *> $null;
+                  & schtasks.exe /Run /TN "AISTV-Launch-StarDesk" *> $null;
+              } catch {}
+              Start-Process -FilePath "$sdAppExe" -WorkingDirectory 'C:\Program Files\StarDesk' -WindowStyle Hidden -ErrorAction SilentlyContinue;
+          }
+
+          # 3. CẤU HÌNH MÃ PIN & LẤY DEVICE ID
+          $pinInput = "$env:INPUT_PIN_CODE";
+          if ([string]::IsNullOrWhiteSpace("$pinInput")) { $pinInput = "Zenova2026"; }
+          $cleanPin = ($pinInput -replace '[^A-Za-z0-9]', '');
           if (($cleanPin.Length -lt 8) -or ($cleanPin.Length -gt 16)) { $cleanPin = 'Zenova2026'; }
 
-          # 1. Thử lấy từ GameViewer CLI
+          # Ghi mã PIN vào config.ini StarDesk
+          $cfgData = "[General]`r`nPassword=$cleanPin`r`nAutoStart=1`r`n";
+          foreach ($dir in @("C:\Program Files\StarDesk", "C:\Program Files (x86)\StarDesk", "C:\ProgramData\StarDesk", "$env:USERPROFILE\AppData\Roaming\StarDesk")) {
+              New-Item -ItemType Directory -Force -Path $dir -ErrorAction SilentlyContinue | Out-Null;
+              Set-Content -Path "$dir\config.ini" -Value $cfgData -Encoding ASCII -Force -ErrorAction SilentlyContinue;
+          }
+
+          Write-Host "│ ⏳ Đang đợi kết nối đám mây NetEase/StarDesk..." -ForegroundColor Cyan;
           if (Test-Path "$gvCli") {
               for ($i = 0; $i -lt 15; $i++) {
                   $echo = & "$gvCli" echo 2>$null;
                   if ($echo -match 'hello') { break; }
-                  Start-Sleep -Seconds 1;
+                  Start-Sleep -Seconds 2;
               }
               & "$gvCli" -c "$cleanPin" *> $null;
-              if ([string]::IsNullOrWhiteSpace("$sdId")) {
-                  for ($i = 0; $i -lt 15; $i++) {
+              Write-Host "│ ✅ Đã gán mã PIN GameViewer: $cleanPin" -ForegroundColor Green;
+          }
+
+          $sdId = "$env:STARDESK_ID_INPUT";
+          if ([string]::IsNullOrWhiteSpace("$sdId")) {
+              if (Test-Path "$gvCli") {
+                  for ($i = 0; $i -lt 25; $i++) {
                       $cliOut = & "$gvCli" -d 2>$null;
-                      if ($cliOut -match '(\d{6,12})') { $sdId = $Matches[1]; break; }
-                      Start-Sleep -Seconds 1;
+                      if ($cliOut -match '(\d{6,12})') {
+                          $sdId = $Matches[1];
+                          break;
+                      }
+                      Start-Sleep -Seconds 2;
                   }
               }
           }
 
-          # 2. Quét sâu vào config.ini của StarDesk
-          $cfgList = @(
-              "C:\Program Files (x86)\StarDesk\config.ini",
-              "C:\Program Files\StarDesk\config.ini",
-              "C:\ProgramData\StarDesk\config.ini",
-              "C:\Users\zenova\AppData\Roaming\StarDesk\config.ini",
-              "C:\Users\runneradmin\AppData\Roaming\StarDesk\config.ini",
-              "C:\Users\zenova\AppData\Local\StarDesk\config.ini",
-              "C:\Users\runneradmin\AppData\Local\StarDesk\config.ini"
-          );
           if ([string]::IsNullOrWhiteSpace("$sdId") -or ($sdId -match 'chưa|đang|Đang')) {
-              for ($i = 0; $i -lt 20; $i++) {
+              $cfgList = @(
+                  "C:\Program Files\StarDesk\config.ini",
+                  "C:\Program Files (x86)\StarDesk\config.ini",
+                  "$env:USERPROFILE\AppData\Roaming\StarDesk\config.ini",
+                  "C:\Users\runneradmin\AppData\Roaming\StarDesk\config.ini"
+              );
+              for ($i = 0; $i -lt 15; $i++) {
                   foreach ($cfg in $cfgList) {
                       if (Test-Path $cfg) {
-                          $content = Get-Content $cfg -Raw -ErrorAction SilentlyContinue;
-                          if ($content -match '(?:ID|cid|DeviceID|Account)\s*=\s*(\d{6,12})') {
+                          $c = Get-Content $cfg -Raw -ErrorAction SilentlyContinue;
+                          if ($c -match '(?:ID|cid|DeviceID|Account)\s*=\s*(\d{6,12})') {
                               $sdId = $Matches[1]; break;
                           }
                       }
                   }
                   if ($sdId -match '^\d+$') { break; }
-                  Start-Sleep -Seconds 1;
+                  Start-Sleep -Seconds 2;
               }
           }
 
           if ([string]::IsNullOrWhiteSpace("$sdId")) {
-              $sdId = "Đang kết nối Server..."
+              $sdId = "Đang kết nối Server...";
           }
 
           Set-Content -Path "C:\stardesk-id.txt" -Value "$sdId" -Force;
@@ -1107,14 +1154,14 @@ jobs:
           "STARDESK_ID=$sdId" >> "$env:GITHUB_ENV";
           "STARDESK_PIN=$cleanPin" >> "$env:GITHUB_ENV";
 
-          Write-Host "│ 🌟 StarDesk ID : $sdId" -ForegroundColor Yellow;
-          Write-Host "│ 🔑 StarDesk PIN: $cleanPin" -ForegroundColor Yellow;
+          Write-Host "│ 🌟 StarDesk Device ID: $sdId" -ForegroundColor Yellow;
+          Write-Host "│ 🔑 StarDesk PIN Code : $cleanPin" -ForegroundColor Yellow;
 
           $global:LASTEXITCODE = 0;
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 12. TẠO ICON DESKTOP ĐẦY ĐỦ TIỆN ÍCH
+      # 13. TẠO ICON DESKTOP TIỆN ÍCH
       # ─────────────────────────────────────────────────────────────
       - name: 🖥️ Tạo các phím tắt tiện ích trên Desktop
         shell: pwsh
@@ -1130,37 +1177,30 @@ jobs:
               if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d -ErrorAction SilentlyContinue | Out-Null; }
 
               # 1. StarDesk Trung
-              $sdExe = (Get-ChildItem -Path @("C:\Program Files\StarDesk", "C:\Program Files (x86)\StarDesk") -Filter "StarDesk.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              $sdExe = 'C:\Program Files\StarDesk\StarDesk.exe';
+              if (-not (Test-Path $sdExe)) {
+                  $sdExe = (Get-ChildItem -Path @("C:\Program Files\StarDesk", "C:\Program Files (x86)\StarDesk") -Filter "StarDesk.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              }
               if ($sdExe) {
                   $lnkGv = $ws.CreateShortcut("$d\🌟 StarDesk Trung (0ms Delay).lnk");
                   $lnkGv.TargetPath = $sdExe;
                   $lnkGv.Save();
               }
 
-              # 2. Kho Ứng Dụng (Downloads & C:\Apps)
+              # 2. Kho Ứng Dụng (Downloads Ổ C)
               $lnkApps = $ws.CreateShortcut("$d\📁 Kho Ứng Dụng (Downloads).lnk");
               $lnkApps.TargetPath = "C:\Users\zenova\Downloads";
               $lnkApps.Save();
 
-              # 3. Spotify
-              $spExe = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Roaming\Spotify", "C:\Users\zenova\AppData\Roaming\Spotify") -Filter "Spotify.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
-              if ($spExe) {
-                  $lnkSp = $ws.CreateShortcut("$d\🎵 Spotify.lnk");
-                  $lnkSp.TargetPath = $spExe;
-                  $lnkSp.Save();
+              # 3. GameViewer
+              $gvExe = 'C:\Program Files\Netease\GameViewer\bin\GameViewer.exe';
+              if (Test-Path $gvExe) {
+                  $lnkGv2 = $ws.CreateShortcut("$d\🎮 NetEase GameViewer.lnk");
+                  $lnkGv2.TargetPath = $gvExe;
+                  $lnkGv2.Save();
               }
 
-              # 4. Discord
-              $dcExe = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Local\Discord", "C:\Users\zenova\AppData\Local\Discord") -Filter "Discord.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*app-*" } | Select-Object -First 1).FullName;
-              if ($dcExe) {
-                  $lnkDc = $ws.CreateShortcut("$d\💬 Discord.lnk");
-                  $lnkDc.TargetPath = $dcExe;
-                  $lnkDc.Arguments = "--disable-gpu --no-sandbox";
-                  $lnkDc.WorkingDirectory = Split-Path $dcExe;
-                  $lnkDc.Save();
-              }
-
-              # 5. Roblox Bloxstrap
+              # 4. Roblox Bloxstrap 120 FPS
               $bloxExe = "C:\Bloxstrap\Bloxstrap.exe";
               if (Test-Path $bloxExe) {
                   $lnkRb = $ws.CreateShortcut("$d\🎮 Roblox (Bloxstrap 120 FPS).lnk");
@@ -1168,7 +1208,7 @@ jobs:
                   $lnkRb.Save();
               }
 
-              # 6. AutoClicker
+              # 5. AutoClicker
               $acExe = "C:\Users\zenova\Downloads\AutoClicker.exe";
               if (Test-Path $acExe) {
                   $lnkAc = $ws.CreateShortcut("$d\⚡ AutoClicker.lnk");
@@ -1176,21 +1216,29 @@ jobs:
                   $lnkAc.Save();
               }
 
-              # 7. EVKey
+              # 6. EVKey
               $evkExe = "C:\EVKey\EVKey64.exe";
               if (Test-Path $evkExe) {
                   $lnkEvk = $ws.CreateShortcut("$d\🇻🇳 EVKey Tiếng Việt.lnk");
                   $lnkEvk.TargetPath = $evkExe;
                   $lnkEvk.Save();
               }
+
+              # 7. Spotify
+              $spExe = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Roaming\Spotify", "C:\Users\zenova\AppData\Roaming\Spotify") -Filter "Spotify.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
+              if ($spExe) {
+                  $lnkSp = $ws.CreateShortcut("$d\🎵 Spotify.lnk");
+                  $lnkSp.TargetPath = $spExe;
+                  $lnkSp.Save();
+              }
           }
 
-          Write-Host "│ ✅ Đã tạo đầy đủ icon Desktop cho tất cả user!" -ForegroundColor Green;
+          Write-Host "│ ✅ Đã tạo đầy đủ icon Desktop!" -ForegroundColor Green;
           $global:LASTEXITCODE = 0;
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 13. KHỞI CHẠY WEB QUẢN LÝ (PORT 8080) & SUNSHINE TUNNEL (PORT 47990)
+      # 14. KHỞI CHẠY WEB QUẢN LÝ (PORT 8080) & SUNSHINE TUNNEL
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Khởi chạy Web Quản Lý VPS (Port 8080) & Sunshine Tunnel
         shell: pwsh
@@ -1202,7 +1250,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $webDir -ErrorAction SilentlyContinue | Out-Null;
           $pyServerPath = [System.IO.Path]::Combine($webDir, 'server.py');
 
-          $pyB64 = 'aW1wb3J0IGh0dHAuc2VydmVyLCBzb2NrZXRzZXJ2ZXIsIGpzb24sIG9zLCBzeXMsIHVybGxpYi5wYXJzZQoKUE9SVCA9IGludChzeXMuYXJndlsxXSkgaWYgbGVuKHN5cy5hcmd2KSA+IDEgZWxzZSA4MDgwClNJR19GSUxFID0gc3lzLmFyZ3ZbMl0gaWYgbGVuKHN5cy5hcmd2KSA+IDIgZWxzZSByIkM6XFpFTk9WQS1WSEQtSE9TVFxjb250cm9sLXNpZ25hbC50eHQiCgpIVE1MX1RFTVBMQVRFID0gIiIiPCFET0NUWVBFIGh0bWw+CjxodG1sIGxhbmc9InZpIj4KPGhlYWQ+CjxtZXRhIGNoYXJzZXQ9InV0Zi04Ij4KPHRpdGxlPlplbm92YSBWUFMgQ29udHJvbCBQYW5lbDwvdGl0bGU+CjxzdHlsZT4KYm9keSB7IGJhY2tncm91bmQ6ICMwOTBkMTY7IGNvbG9yOiAjZjNmNGY2OyBmb250LWZhbWlseTogc3lzdGVtLXVpOyBtYXJnaW46IDA7IHBhZGRpbmc6IDIwcHg7IGRpc3BsYXk6IGZsZXg7IGp1c3RpZnktY29udGVudDogY2VudGVyOyB9Ci5jYXJkIHsgd2lkdGg6IDEwMCU7IG1heC13aWR0aDogODUwcHg7IGJhY2tncm91bmQ6ICMxMTE4Mjc7IGJvcmRlcjogMXB4IHNvbGlkICMxZjI5Mzc7IGJvcmRlci1yYWRpdXM6IDE2cHg7IHBhZGRpbmc6IDI0cHg7IH0KLmJveCB7IGJhY2tncm91bmQ6ICMxZjI5Mzc7IGJvcmRlci1yYWRpdXM6IDEycHg7IHBhZGRpbmc6IDE2cHg7IG1hcmdpbjogMTBweCAwOyB9Ci5jb2RlIHsgYmFja2dyb3VuZDogIzExMTgyNzsgcGFkZGluZzogNnB4IDEwcHg7IGJvcmRlci1yYWRpdXM6IDZweDsgZm9udC1mYW1pbHk6IG1vbm9zcGFjZTsgY29sb3I6ICNmYWNjMTU7IH0KYnV0dG9uIHsgcGFkZGluZzogMTRweDsgYm9yZGVyOiBub25lOyBib3JkZXItcmFkaXVzOiAxMHB4OyBmb250LXdlaWdodDogNzAwOyBjdXJzb3I6IHBvaW50ZXI7IGNvbG9yOiAjZmZmOyBtYXJnaW46IDRweDsgfQouYnRuLXNhdmUgeyBiYWNrZ3JvdW5kOiAjMDI4NGM3OyB9IC5idG4tcnN0IHsgYmFja2dyb3VuZDogI2Q5NzcwNjsgfSAuYnRuLXN0b3AgeyBiYWNrZ3JvdW5kOiAjZGMyNjI2OyB9Cjwvc3R5bGU+CjwvaGVhZD4KPGJvZHk+CjxkaXYgY2xhc3M9ImNhcmQiPgo8aDI+8J+agCBaRU5PVkEgVUxUSU1BVEUgVlBTPC9oMj4KPHA+TcOheTogPGI+X19ESVNQX05BTUVfXyAoX19NQUNIX0lEX18pPC9iPjwvcD4KPGRpdiBjbGFzcz0iYm94Ij48aDM+8J+MnyBTdGFyRGVzayBUcnVuZzwvaDM+CjxwPklEOiA8c3BhbiBjbGFzcz0iY29kZSI+X19TRF9JRF9fPC9zcGFuPjwvcD4KPHA+UElOOiA8c3BhbiBjbGFzcz0iY29kZSI+X19TRF9QSU5fXzwvc3Bhbj48L3A+PC9kaXY+CjxkaXYgY2xhc3M9ImJveCI+PGgzPvCflqXvuI8gUkRQIC8gVGFpbHNjYWxlPC9oMz4KPHA+UkRQOiA8c3BhbiBjbGFzcz0iY29kZSI+X19SRFBfQUREUl9fPC9zcGFuPjwvcD4KPHA+VXNlcjogPGI+emVub3ZhPC9iPiB8IFBhc3M6IDxiPl9fUFdEX188L2I+PC9wPjwvZGl2Pgo8ZGl2IGNsYXNzPSJib3giPjxoMz7imIDvuI8gU3Vuc2hpbmU8L2gzPjxwPjxhIGhyZWY9Il9fU1VOX0xJTktfXyIgdGFyZ2V0PSJfYmxhbmsiPvCfjJAgU3Vuc2hpbmUgV2ViIFVJPC9hPjwvcD48L2Rpdj4KPGRpdj4KPGJ1dHRvbiBjbGFzcz0iYnRuLXNhdmUiIG9uY2xpY2s9InNlbmRDbWQoJ1NBVkVfTk9XJykiPvCfkr4gTMavVSBOR0FZPC9idXR0b24+CjxidXR0b24gY2xhc3M9ImJ0bi1yc3QiIG9uY2xpY2s9InNlbmRDbWQoJ1JFU1RBUlRfU0VTU0lPTicpIj7wn5SBIFJFU0VUPC9idXR0b24+CjxidXR0b24gY2xhc3M9ImJ0bi1zdG9wIiBvbmNsaWNrPSJzZW5kQ21kKCdTVE9QX1NFU1NJT04nKSI+8J+bkSBOR+G6rlQgVlBTPC9idXR0b24+CjwvZGl2Pgo8L2Rpdj4KPHNjcmlwdD4KYXN5bmMgZnVuY3Rpb24gc2VuZENtZChjKSB7CiAgICBpZiAoY29uZmlybSgnWMOxYyBuaOG6rW4gdGjhu7FjIGhp4buHbiBs4buHbmg6ICcgKyBjICsgJz8nKSkgewogICAgICAgIHRyeSB7CiAgICAgICAgICAgIHZhciByID0gYXdhaXQgZmV0Y2goJy9hcGkvY21kJywgeyBtZXRob2Q6ICdQT1NUJywgaGVhZGVyczogeyAnQ29udGVudC1UeXBlJzogJ2FwcGxpY2F0aW9uL2pzb24nIH0sIGJvZHk6IEpTT04uc3RyaW5naWZ5KHsgY21kOiBjIH0pIH0pOwogICAgICAgICAgICB2YXIgZCA9IGF3YWl0IHIuanNvbigpOwogICAgICAgICAgICBhbGVydChkLm1lc3NhZ2UpOwogICAgICAgIH0gY2F0Y2goZSkgeyBhbGVydCgnTOG7l2k6ICcgKyBlKTsgfQogICAgfQp9CnNldFRpbWVvdXQoKCkgPT4gbG9jYXRpb24ucmVsb2FkKCksIDE1MDAwKTsKPC9zY3JpcHQ+CjwvYm9keT4KPC9odG1sPgoiIiIKCmNsYXNzIFplbm92YUhhbmRsZXIoaHR0cC5zZXJ2ZXIuQmFzZUhUVFBSZXF1ZXN0SGFuZGxlcik6CiAgICBkZWYgbG9nX21lc3NhZ2Uoc2VsZiwgZm9ybWF0LCAqYXJncyk6IHBhc3MKCiAgICBkZWYgc2VuZF9jb3JzKHNlbGYpOgogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0FjY2Vzcy1Db250cm9sLUFsbG93LU9yaWdpbicsICcqJykKCiAgICBkZWYgZG9fT1BUSU9OUyhzZWxmKToKICAgICAgICBzZWxmLnNlbmRfcmVzcG9uc2UoMjAwKQogICAgICAgIHNlbGYuc2VuZF9jb3JzKCkKICAgICAgICBzZWxmLmVuZF9oZWFkZXJzKCkKCiAgICBkZWYgZG9fUE9TVChzZWxmKToKICAgICAgICBjbWQgPSAiIgogICAgICAgIGxlbmd0aCA9IGludChzZWxmLmhlYWRlcnMuZ2V0KCdjb250ZW50LWxlbmd0aCcsIDApKQogICAgICAgIGJvZHkgPSBzZWxmLnJmaWxlLnJlYWQobGVuZ3RoKS5kZWNvZGUoJ3V0Zi04JywgZXJyb3JzPSdpZ25vcmUnKQogICAgICAgIHRyeToKICAgICAgICAgICAgZGF0YSA9IGpzb24ubG9hZHMoYm9keSkKICAgICAgICAgICAgY21kID0gZGF0YS5nZXQoJ2NtZCcsIGJvZHkpCiAgICAgICAgZXhjZXB0OgogICAgICAgICAgICBjbWQgPSBib2R5CiAgICAgICAgaWYgY21kIGFuZCBTSUdfRklMRToKICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgb3MubWFrZWRpcnMob3MucGF0aC5kaXJuYW1lKFNJR19GSUxFKSwgZXhpc3Rfb2s9VHJ1ZSkKICAgICAgICAgICAgICAgIHdpdGggb3BlbihTSUdfRklMRSwgJ3cnLCBlbmNvZGluZz0ndXRmLTgnKSBhcyBmOgogICAgICAgICAgICAgICAgICAgIGYud3JpdGUoY21kLnN0cmlwKCkpCiAgICAgICAgICAgIGV4Y2VwdDogcGFzcwogICAgICAgIHJlc3AgPSBqc29uLmR1bXBzKHsib2siOiBUcnVlLCAibWVzc2FnZSI6ICLEkMOjIG5o4bqtbiBs4buHbmg6ICIgKyBzdHIoY21kLnN0cmlwKCkpfSkuZW5jb2RlKCd1dGYtOCcpCiAgICAgICAgc2VsZi5zZW5kX3Jlc3BvbnNlKDIwMCkKICAgICAgICBzZWxmLnNlbmRfY29ycygpCiAgICAgICAgc2VsZi5zZW5kX2hlYWRlcignQ29udGVudC1UeXBlJywgJ2FwcGxpY2F0aW9uL2pzb247IGNoYXJzZXQ9dXRmLTgnKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtTGVuZ3RoJywgc3RyKGxlbihyZXNwKSkpCiAgICAgICAgc2VsZi5lbmRfaGVhZGVycygpCiAgICAgICAgc2VsZi53ZmlsZS53cml0ZShyZXNwKQoKICAgIGRlZiBkb19HRVQoc2VsZik6CiAgICAgICAgZGVmIHJmKHApOgogICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICBpZiBvcy5wYXRoLmV4aXN0cyhwKToKICAgICAgICAgICAgICAgICAgICB3aXRoIG9wZW4ocCwgJ3InLCBlbmNvZGluZz0ndXRmLTgnLCBlcnJvcnM9J2lnbm9yZScpIGFzIGY6IHJldHVybiBmLnJlYWQoKS5zdHJpcCgpCiAgICAgICAgICAgIGV4Y2VwdDogcGFzcwogICAgICAgICAgICByZXR1cm4gIiIKICAgICAgICB0c0lwID0gcmYociJDOFx0YWlsc2NhbGUtaXAudHh0Iikgb3Igb3MuZW52aXJvbi5nZXQoJ1RBSUxTQ0FMRV9JUCcsICcnKQogICAgICAgIHB1YklwID0gcmYociJDOlxtYWNoaW5lLWlwLnR4dCIpIG9yICdEYW5nIGzhuqV5JwogICAgICAgIG5ncm9rUmRwID0gcmYociJDOlxyZHAtbmdyb2sudHh0IikKICAgICAgICBzZElkID0gcmYociJDOlxzdGFyZGVzay1pZC50eHQiKSBvciAnRGFuZyBr4b+FdCBu4buRaScKICAgICAgICBzZFBpbiA9IHJmKHIiQzpcc3RhcmRlc2stcGluLnR4dCIpIG9yICdaZW5vdmEyMDI2JwogICAgICAgIGNmV2ViID0gcmYociJDOlxjbG91ZGZsYXJlZC13ZWItdXJsLnR4dCIpCiAgICAgICAgY2ZTdW4gPSByZihyIkM6XGNsb3VkZmxhcmVkLXN1bnNoaW5lLXVybC50eHQiKQogICAgICAgIG1hY2hJZCA9IG9zLmVudmlyb24uZ2V0KCdNQUNISU5FX0lEJywgJ3plbm92YS0xJykKICAgICAgICBkaXNwTmFtZSA9IG9zLmVudmlyb24uZ2V0KCdESVNQTEFZX05BTUUnLCAnWmVub3ZhJykKICAgICAgICBwd2QgPSBvcy5lbnZpcm9uLmdldCgnRklYRURfUEFTU1dPUkQnLCAnWmVub3ZhQDIwMjYnKQogICAgICAgIGlmIG5ncm9rUmRwOgogICAgICAgICAgICByZHBBZGRyID0gbmdyb2tSZHAKICAgICAgICBlbGlmIHRzSXAgYW5kIHRzSXAgIT0gJzEyNy4wLjAuMSc6CiAgICAgICAgICAgIHJkcEFkZHIgPSB0c0lwICsgJzozMzg5JwogICAgICAgIGVsc2U6CiAgICAgICAgICAgIHJkcEFkZHIgPSBwdWJJcCArICc6MzM4OScKICAgICAgICBpZiBjZlN1bjoKICAgICAgICAgICAgc3VuTGluayA9IGNmU3VuCiAgICAgICAgZWxzZToKICAgICAgICAgICAgc3VuTGluayA9ICdodHRwczovLzEyNy4wLjAuMTo0Nzk5MCcKICAgICAgICBodG1sID0gSFRNTF9URU1QTEFURQogICAgICAgIGh0bWwgPSBodG1sLnJlcGxhY2UoJ19fRElTUF9OQU1FX18nLCBkaXNwTmFtZSkKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCdfX01BQ0hfSURfXycsIG1hY2hJZCkKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCdfX1NEX0lEX18nLCBzZElkKQogICAgICAgIGh0bWwgPSBodG1sLnJlcGxhY2UoJ19fU0RfUElOX18nLCBzZFBpbikKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCdfX1JEUF9BRERSX18nLCByZHBBZGRyKQogICAgICAgIGh0bWwgPSBodG1sLnJlcGxhY2UoJ19fUFdEX18nLCBwd2QpCiAgICAgICAgaHRtbCA9IGh0bWwucmVwbGFjZSgnX19TVU5fTElOS19fJywgc3VuTGluaykKICAgICAgICByZXNwID0gaHRtbC5lbmNvZGUoJ3V0Zi04JykKICAgICAgICBzZWxmLnNlbmRfcmVzcG9uc2UoMjAwKQogICAgICAgIHNlbGYuc2VuZF9jb3JzKCkKICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKCdDb250ZW50LVR5cGUnLCAndGV4dC9odG1sOyBjaGFyc2V0PXV0Zi04JykKICAgICAgICBzZWxmLnNlbmRfaGVhZGVyKCdDb250ZW50LUxlbmd0aCcsIHN0cihsZW4ocmVzcCkpKQogICAgICAgIHNlbGYuZW5kX2hlYWRlcnMoKQogICAgICAgIHNlbGYud2ZpbGUud3JpdGUocmVzcCkKCmNsYXNzIFRocmVhZGVkSFRUUFNlcnZlcihzb2NrZXRzZXJ2ZXIuVGhyZWFkaW5nTWl4SW4sIGh0dHAuc2VydmVyLkhUVFBTZXJ2ZXIpOgogICAgZGFlbW9uX3RocmVhZHMgPSBUcnVlCiAgICBhbGxvd19yZXVzZV9hZGRyZXNzID0gVHJ1ZQoKaWYgX19uYW1lX18gPT0gJ19fbWFpbl9fJzoKICAgIHNlcnZlciA9IFRocmVhZGVkSFRUUFNlcnZlcigoJzAuMC4wLjAnLCBQT1JUKSwgWmVub3ZhSGFuZGxlcikKICAgIHNlcnZlci5zZXJ2ZV9mb3JldmVyKCkK';
+          $pyB64 = 'aW1wb3J0IGh0dHAuc2VydmVyLCBzb2NrZXRzZXJ2ZXIsIGpzb24sIG9zLCBzeXMsIHVybGxpYi5wYXJzZQoKUE9SVCA9IGludChzeXMuYXJndlsxXSkgaWYgbGVuKHN5cy5hcmd2KSA+IDEgZWxzZSA4MDgwClNJR19GSUxFID0gc3lzLmFyZ3ZbMl0gaWYgbGVuKHN5cy5hcmd2KSA+IDIgZWxzZSByIkM6XFpFTk9WQS1WSEQtSE9TVFxjb250cm9sLXNpZ25hbC50eHQiCgpIVE1MX1RFTVBMQVRFID0gIiIiPCFET0NUWVBFIGh0bWw+CjxodG1sIGxhbmc9InZpIj4KPGhlYWQ+CjxtZXRhIGNoYXJzZXQ9InV0Zi04Ij4KPHRpdGxlPlplbm92YSBWUFMgQ29udHJvbCBQYW5lbDwvdGl0bGU+CjxzdHlsZT4KYm9keSB7IGJhY2tncm91bmQ6ICMwOTBkMTY7IGNvbG9yOiAjZjNmNGY2OyBmb250LWZhbWlseTogc3lzdGVtLXVpOyBtYXJnaW46IDA7IHBhZGRpbmc6IDIwcHg7IGRpc3BsYXk6IGZsZXg7IGp1c3RpZnktY29udGVudDogY2VudGVyOyB9Ci5jYXJkIHsgd2lkdGg6IDEwMCU7IG1heC13aWR0aDogODUwcHg7IGJhY2tncm91bmQ6ICMxMTE4Mjc7IGJvcmRlcjogMXB4IHNvbGlkICMxZjI5Mzc7IGJvcmRlci1yYWRpdXM6IDE2cHg7IHBhZGRpbmc6IDI0cHg7IH0KLmJveCB7IGJhY2tncm91bmQ6ICMxZjI5Mzc7IGJvcmRlci1yYWRpdXM6IDEycHg7IHBhZGRpbmc6IDE2cHg7IG1hcmdpbjogMTBweCAwOyB9Ci5jb2RlIHsgYmFja2dyb3VuZDogIzExMTgyNzsgcGFkZGluZzogNnB4IDEwcHg7IGJvcmRlci1yYWRpdXM6IDZweDsgZm9udC1mYW1pbHk6IG1vbm9zcGFjZTsgY29sb3I6ICNmYWNjMTU7IH0KYnV0dG9uIHsgcGFkZGluZzogMTRweDsgYm9yZGVyOiBub25lOyBib3JkZXItcmFkaXVzOiAxMHB4OyBmb250LXdlaWdodDogNzAwOyBjdXJzb3I6IHBvaW50ZXI7IGNvbG9yOiAjZmZmOyBtYXJnaW46IDRweDsgfQouYnRuLXNhdmUgeyBiYWNrZ3JvdW5kOiAjMDI4NGM3OyB9IC5idG4tcnN0IHsgYmFja2dyb3VuZDogI2Q5NzcwNjsgfSAuYnRuLXN0b3AgeyBiYWNrZ3JvdW5kOiAjZGMyNjI2OyB9Cjwvc3R5bGU+CjwvaGVhZD4KPGJvZHk+CjxkaXYgY2xhc3M9ImNhcmQiPgo8aDI+8J+agCBaRU5PVkEgVUxUSU1BVEUgVlBTPC9oMj4KPHA+TcOheTogPGI+X19ESVNQX05BTUVfXyAoX19NQUNIX0lEX18pPC9iPjwvcD4KPGRpdiBjbGFzcz0iYm94Ij48aDM+8J+MnyBTdGFyRGVzayBUcnVuZzwvaDM+CjxwPklEOiA8c3BhbiBjbGFzcz0iY29kZSI+X19TRF9JRF9fPC9zcGFuPjwvcD4KPHA+UElOOiA8c3BhbiBjbGFzcz0iY29kZSI+X19TRF9QSU5fXzwvc3Bhbj48L3A+PC9kaXY+CjxkaXYgY2xhc3M9ImJveCI+PGgzPvCflqXvuI8gUkRQIC8gVGFpbHNjYWxlPC9oMz4KPHA+UkRQOiA8c3BhbiBjbGFzcz0iY29kZSI+X19SRFBfQUREUl9fPC9zcGFuPjwvcD4KPHA+VXNlcjogPGI+emVub3ZhPC9iPiB8IFBhc3M6IDxiPl9fUFdEX188L2I+PC9wPjwvZGl2Pgo8ZGl2IGNsYXNzPSJib3giPjxoMz7imIDvuI8gU3Vuc2hpbmUgV2ViIFVJPC9oMz4KPHA+8J+MkW5UYWlsc2NhbGUgVVJMOiA8YSBocmVmPSJfX1NVTl9UU19MSU5LX18iIHRhcmdldD0iX2JsYW5rIj5fX1NVTl9UU19MSU5LX188L2E+PC9wPgo8cD7wn4yQIENsb3VkZmxhcmUgVVJMOiA8YSBocmVmPSJfX1NVTl9MSU5LX18iIHRhcmdldD0iX2JsYW5rIj5fX1NVTl9MSU5LX188L2E+PC9wPjwvZGl2Pgo8ZGl2Pgo8YnV0dG9uIGNsYXNzPSJidG4tc2F2ZSIgb25jbGljaz0ic2VuZENtZCgnU0FWRV9OT1cnKSI+8J+SvgCBMxqFVIE5HQVkgKEtIxJRORyBU4bqldCBNw4FZXTwvYnV0dG9uPgo8YnV0dG9uIGNsYXNzPSJidG4tcnN0IiBvbmNsaWNrPSJzZW5kQ21kKCdSRVNUX1NFU1NJT04nKSI+8J+UgSBSRVNFVCAvIFBIScOKTiBUSeG6vlA8L2J1dHRvbj4KPGJ1dHRvbiBjbGFzcz0iYnRuLXN0b3AiIG9uY2xpY2s9InNlbmRDbWQoJ1NUT1BfU0VTU0lPTicpIj7wn5uRIE5H4bqAVCBOR0FZPC9idXR0b24+CjwvZGl2Pgo8L2Rpdj4KPHNjcmlwdD4KYXN5bmMgZnVuY3Rpb24gc2VuZENtZChjKSB7CiAgICBpZiAoY29uZmlybSgnWMOxYyBuaOG6rW4gdGjhu7FjIGhp4buHbiBs4buHbmg6ICcgKyBjICsgJz8nKSkgewogICAgICAgIHRyeSB7CiAgICAgICAgICAgIHZhciByID0gYXdhaXQgZmV0Y2goJy9hcGkvY21kJywgeyBtZXRob2Q6ICdQT1NUJywgaGVhZGVyczogeyAnQ29udGVudC1UeXBlJzogJ2FwcGxpY2F0aW9uL2pzb24nIH0sIGJvZHk6IEpTT04uc3RyaW5naWZ5KHsgY21kOiBjIH0pIH0pOwogICAgICAgICAgICB2YXIgZCA9IGF3YWl0IHIuanNvbigpOwogICAgICAgICAgICBhbGVydChkLm1lc3NhZ2UpOwogICAgICAgIH0gY2F0Y2goZSkgeyBhbGVydCgnTOG7l2k6ICcgKyBlKTsgfQogICAgfQp9CnNldFRpbWVvdXQoKCkgPT4gbG9jYXRpb24ucmVsb2FkKCksIDE1MDAwKTsKPC9zY3JpcHQ+CjwvYm9keT4KPC9odG1sPgoiIiIKCmNsYXNzIFplbm92YUhhbmRsZXIoaHR0cC5zZXJ2ZXIuQmFzZUhUVFBSZXF1ZXN0SGFuZGxlcik6CiAgICBkZWYgbG9nX21lc3NhZ2Uoc2VsZiwgZm9ybWF0LCAqYXJncyk6IHBhc3MKCiAgICBkZWYgc2VuZF9jb3JzKHNlbGYpOgogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0FjY2Vzcy1Db250cm9sLUFsbG93LU9yaWdpbicsICcqJykKCiAgICBkZWYgZG9fT1BUSU9OUyhzZWxmKToKICAgICAgICBzZWxmLnNlbmRfcmVzcG9uc2UoMjAwKQogICAgICAgIHNlbGYuc2VuZF9jb3JzKCkKICAgICAgICBzZWxmLmVuZF9oZWFkZXJzKCkKCiAgICBkZWYgZG9fUE9TVChzZWxmKToKICAgICAgICBjbWQgPSAiIgogICAgICAgIGxlbmd0aCA9IGludChzZWxmLmhlYWRlcnMuZ2V0KCdjb250ZW50LWxlbmd0aCcsIDApKQogICAgICAgIGJvZHkgPSBzZWxmLnJmaWxlLnJlYWQobGVuZ3RoKS5kZWNvZGUoJ3V0Zi04JywgZXJyb3JzPSdpZ25vcmUnKQogICAgICAgIHRyeToKICAgICAgICAgICAgZGF0YSA9IGpzb24ubG9hZHMoYm9keSkKICAgICAgICAgICAgY21kID0gZGF0YS5nZXQoJ2NtZCcsIGJvZHkpCiAgICAgICAgZXhjZXB0OgogICAgICAgICAgICBjbWQgPSBib2R5CiAgICAgICAgaWYgY21kIGFuZCBTSUdfRklMRToKICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgb3MubWFrZWRpcnMob3MucGF0aC5kaXJuYW1lKFNJR19GSUxFKSwgZXhpc3Rfb2s9VHJ1ZSkKICAgICAgICAgICAgICAgIHdpdGggb3BlbihTSUdfRklMRSwgJ3cnLCBlbmNvZGluZz0ndXRmLTgnKSBhcyBmOgogICAgICAgICAgICAgICAgICAgIGYud3JpdGUoY21kLnN0cmlwKCkpCiAgICAgICAgICAgIGV4Y2VwdDogcGFzcwogICAgICAgIHJlc3AgPSBqc29uLmR1bXBzKHsib2siOiBUcnVlLCAibWVzc2FnZSI6ICLEkMOjIG5o4bqtbiBs4buHbmg6ICIgKyBzdHIoY21kLnN0cmlwKCkpfSkuZW5jb2RlKCd1dGYtOCcpCiAgICAgICAgc2VsZi5zZW5kX3Jlc3BvbnNlKDIwMCkKICAgICAgICBzZWxmLnNlbmRfY29ycygpCiAgICAgICAgc2VsZi5zZW5kX2hlYWRlcignQ29udGVudC1UeXBlJywgJ2FwcGxpY2F0aW9uL2pzb247IGNoYXJzZXQ9dXRmLTgnKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtTGVuZ3RoJywgc3RyKGxlbihyZXNwKSkpCiAgICAgICAgc2VsZi5lbmRfaGVhZGVycygpCiAgICAgICAgc2VsZi53ZmlsZS53cml0ZShyZXNwKQoKICAgIGRlZiBkb19HRVQoc2VsZik6CiAgICAgICAgZGVmIHJmKHApOgogICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICBpZiBvcy5wYXRoLmV4aXN0cyhwKToKICAgICAgICAgICAgICAgICAgICB3aXRoIG9wZW4ocCwgJ3InLCBlbmNvZGluZz0ndXRmLTgnLCBlcnJvcnM9J2lnbm9yZScpIGFzIGY6IHJldHVybiBmLnJlYWQoKS5zdHJpcCgpCiAgICAgICAgICAgIGV4Y2VwdDogcGFzcwogICAgICAgICAgICByZXR1cm4gIiIKICAgICAgICB0c0lwID0gcmYociJDOFx0YWlsc2NhbGUtaXAudHh0Iikgb3Igb3MuZW52aXJvbi5nZXQoJ1RBSUxTQ0FMRV9JUCcsICcnKQogICAgICAgIHB1YklwID0gcmYociJDOlxtYWNoaW5lLWlwLnR4dCIpIG9yICdEYW5nIGzhuqV5JwogICAgICAgIG5ncm9rUmRwID0gcmYociJDOlxyZHAtbmdyb2sudHh0IikKICAgICAgICBzZElkID0gcmYociJDOlxzdGFyZGVzay1pZC50eHQiKSBvciAnRGFuZyBr4b+FdCBu4buRaScKICAgICAgICBzZFBpbiA9IHJmKHIiQzpcc3RhcmRlc2stcGluLnR4dCIpIG9yICdaZW5vdmEyMDI2JwogICAgICAgIGNmV2ViID0gcmYociJDOlxjbG91ZGZsYXJlZC13ZWItdXJsLnR4dCIpCiAgICAgICAgY2ZTdW4gPSByZihyIkM6XGNsb3VkZmxhcmVkLXN1bnNoaW5lLXVybC50eHQiKQogICAgICAgIG1hY2hJZCA9IG9zLmVudmlyb24uZ2V0KCdNQUNISU5FX0lEJywgJ3plbm92YS0xJykKICAgICAgICBkaXNwTmFtZSA9IG9zLmVudmlyb24uZ2V0KCdESVNQTEFZX05BTUUnLCAnWmVub3ZhJykKICAgICAgICBwd2QgPSBvcy5lbnZpcm9uLmdldCgnRklYRURfUEFTU1dPUkQnLCAnWmVub3ZhQDIwMjYnKQogICAgICAgIGlmIG5ncm9rUmRwOgogICAgICAgICAgICByZHBBZGRyID0gbmdyb2tSZHAKICAgICAgICBlbGlmIHRzSXAgYW5kIHRzSXAgIT0gJzEyNy4wLjAuMSc6CiAgICAgICAgICAgIHJkcEFkZHIgPSB0c0lwICsgJzozMzg5JwogICAgICAgIGVsc2U6CiAgICAgICAgICAgIHJkcEFkZHIgPSBwdWJJcCArICc6MzM4OScKICAgICAgICBpZiB0c0lwIGFuZCB0c0lwICE9ICcxMjcuMC4wLjEnOgogICAgICAgICAgICBzdW5Uc0xpbmsgPSAnaHR0cHM6Ly8nICsgdHNJcCArICc6NDc5OTAnCiAgICAgICAgZWxzZToKICAgICAgICAgICAgc3VuVHNMaW5rID0gJ2h0dHBzOi8vMTI3LjAuMC4xOjQ3OTkwJwogICAgICAgIGlmIGNmU3VuOgogICAgICAgICAgICBzdW5MaW5rID0gY2ZTdW4KICAgICAgICBlbHNlOgogICAgICAgICAgICBzdW5MaW5rID0gc3VuVHNMaW5rCiAgICAgICAgaHRtbCA9IEhUTUxfVEVNUExBVEUKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCdfX0RJU1BfTkFNRV9fJywgZGlzcE5hbWUpCiAgICAgICAgaHRtbCA9IGh0bWwucmVwbGFjZSgnX19NQUNIX0lEX18nLCBtYWNoSWQpCiAgICAgICAgaHRtbCA9IGh0bWwucmVwbGFjZSgnX19TRF9JRF9fJywgc2RJZCkKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCdfX1NEX1BJTl9fJywgc2RQaW4pCiAgICAgICAgaHRtbCA9IGh0bWwucmVwbGFjZSgnX19SRFBfQUREUl9fJywgcmRwQWRkcikKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCdfX1BXRF9fJywgcHdkKQogICAgICAgIGh0bWwgPSBodG1sLnJlcGxhY2UoJ19fU1VOX1RTX0xJTktfXycsIHN1blRzTGluaykKICAgICAgICBodG1sID0gaHRtbC5yZXBsYWNlKCdfX1NVTl9MSU5LX18nLCBzdW5MaW5rKQogICAgICAgIHJlc3AgPSBodG1sLmVuY29kZSgndXRmLTgnKQogICAgICAgIHNlbGYuc2VuZF9yZXNwb25zZSgyMDApCiAgICAgICAgc2VsZi5zZW5kX2NvcnMoKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtVHlwZScsICd0ZXh0L2h0bWw7IGNoYXJzZXQ9dXRmLTgnKQogICAgICAgIHNlbGYuc2VuZF9oZWFkZXIoJ0NvbnRlbnQtTGVuZ3RoJywgc3RyKGxlbihyZXNwKSkpCiAgICAgICAgc2VsZi5lbmRfaGVhZGVycygpCiAgICAgICAgc2VsZi53ZmlsZS53cml0ZShyZXNwKQoKY2xhc3MgVGhyZWFkZWRIVFRQU2VydmVyKHNvY2tldHNlcnZlci5UaHJlYWRpbmdNaXhJbiwgaHR0cC5zZXJ2ZXIuSFRUUFNlcnZlcik6CiAgICBkYWVtb25fdGhyZWFkcyA9IFRydWUKICAgIGFsbG93X3JldXNlX2FkZHJlc3MgPSBUcnVlCgppZiBfX25hbWVfXyA9PSAnX19tYWluX18nOgogICAgc2VydmVyID0gVGhyZWFkZWRIVFRQU2VydmVyKCgnMC4wLjAuMCcsIFBPUlQpLCBaZW5vdmFIYW5kbGVyKQogICAgc2VydmVyLnNlcnZlX2ZvcmV2ZXIoKQo=';
           [System.IO.File]::WriteAllBytes($pyServerPath, [System.Convert]::FromBase64String($pyB64));
 
           $pyExe = (Get-Command python -ErrorAction SilentlyContinue).Source;
@@ -1210,21 +1258,14 @@ jobs:
           Start-Process -FilePath $pyExe -ArgumentList "`"$pyServerPath`"", "8080", "`"$env:CONTROL_SIGNAL_FILE`"" -WindowStyle Hidden -ErrorAction SilentlyContinue;
 
           Start-Sleep -Seconds 3;
-          try {
-              $chk = Invoke-WebRequest -Uri "http://127.0.0.1:8080" -UseBasicParsing -TimeoutSec 3;
-              if ($chk.StatusCode -eq 200) { Write-Host "│ ✅ Web Server OK port 8080!" -ForegroundColor Green; }
-          } catch {}
 
-          # KHỞI CHẠY CLOUDFLARE TUNNEL CHO CẢ WEB 8080 VÀ SUNSHINE 47990
+          # Khởi chạy Cloudflare Tunnel cho cả Web Quản Lý và Sunshine Web
           $cfExe = 'C:\cloudflared.exe';
           try {
               & curl.exe -L --retry 2 "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -o "$cfExe" 2>$null;
               if (Test-Path "$cfExe") {
-                  # Tunnel cho Web Quản Lý (8080)
                   Start-Process -FilePath "$cfExe" -ArgumentList "tunnel --url http://127.0.0.1:8080 --logfile C:\cloudflared-web.log" -WindowStyle Hidden;
-                  # Tunnel cho Sunshine Web UI (47990 HTTPS --no-tls-verify)
                   Start-Process -FilePath "$cfExe" -ArgumentList "tunnel --url https://127.0.0.1:47990 --no-tls-verify --logfile C:\cloudflared-sunshine.log" -WindowStyle Hidden;
-                  Write-Host "│ ✅ Đã khởi động Cloudflare Tunnel cho cả Web 8080 và Sunshine 47990!" -ForegroundColor Green;
               }
           } catch {}
 
@@ -1233,7 +1274,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 14. THÔNG TIN KẾT NỐI ZENOVA VPS
+      # 15. THÔNG TIN KẾT NỐI ZENOVA VPS
       # ─────────────────────────────────────────────────────────────
       - name: 🎉 Thông tin kết nối Zenova VPS
         shell: pwsh
@@ -1244,7 +1285,6 @@ jobs:
           $cfWeb = "";
           $cfSunshine = "";
 
-          # Quét URLs từ Cloudflared
           for ($i = 0; $i -lt 20; $i++) {
               Start-Sleep -Milliseconds 500;
               if ((-not $cfWeb) -and (Test-Path "C:\cloudflared-web.log")) {
@@ -1265,14 +1305,17 @@ jobs:
           }
 
           $publicWeb = if ($cfWeb) { $cfWeb } else { "http://127.0.0.1:8080" };
-          $publicSunshine = if ($cfSunshine) { $cfSunshine } else { "https://127.0.0.1:47990" };
+          $tsIp = if (Test-Path "C:\tailscale-ip.txt") { (Get-Content "C:\tailscale-ip.txt" -Raw).Trim() } else { "" };
+          $pubIp = if (Test-Path "C:\machine-ip.txt") { (Get-Content "C:\machine-ip.txt" -Raw).Trim() } else { "" };
+          $pass = "$env:FIXED_PASSWORD";
+
+          # Link Web Sunshine: Tailscale trực tiếp và Cloudflare dự phòng
+          $sunshineTsUrl = if ($tsIp -and ($tsIp -match '^100\.')) { "https://$($tsIp):47990" } else { "https://127.0.0.1:47990" };
+          $sunshineCfUrl = if ($cfSunshine) { $cfSunshine } else { $sunshineTsUrl };
 
           $sdId = if (Test-Path "C:\stardesk-id.txt") { (Get-Content "C:\stardesk-id.txt" -Raw).Trim() } else { "$env:STARDESK_ID" };
           $sdPin = if (Test-Path "C:\stardesk-pin.txt") { (Get-Content "C:\stardesk-pin.txt" -Raw).Trim() } else { "$env:STARDESK_PIN" };
           $ngrokRdp = if (Test-Path "C:\rdp-ngrok.txt") { (Get-Content "C:\rdp-ngrok.txt" -Raw).Trim() } else { "" };
-          $tsIp = if (Test-Path "C:\tailscale-ip.txt") { (Get-Content "C:\tailscale-ip.txt" -Raw).Trim() } else { "" };
-          $pubIp = if (Test-Path "C:\machine-ip.txt") { (Get-Content "C:\machine-ip.txt" -Raw).Trim() } else { "" };
-          $pass = "$env:FIXED_PASSWORD";
 
           $rdpTarget = if ($ngrokRdp) { $ngrokRdp } elseif ($tsIp -and ($tsIp -notmatch 'chưa|Chưa|127\.0\.0\.1|Không')) { "$tsIp:3389" } else { "$pubIp:3389" };
 
@@ -1280,8 +1323,9 @@ jobs:
           Write-Host "======================================================================" -ForegroundColor Green;
           Write-Host "                 🎉 ZENOVA ULTIMATE VPS ĐÃ SẴN SÀNG!                  " -ForegroundColor Green;
           Write-Host "======================================================================" -ForegroundColor Green;
+          Write-Host "☀️ SUNSHINE WEB UI (TAILSCALE)  : $sunshineTsUrl" -ForegroundColor Cyan;
+          Write-Host "☀️ SUNSHINE WEB UI (CLOUDFLARE) : $sunshineCfUrl" -ForegroundColor White;
           Write-Host "🌐 LINK WEB QUẢN LÝ (PORT 8080) : $publicWeb" -ForegroundColor Cyan;
-          Write-Host "☀️ SUNSHINE WEB UI (CLOUDFLARE) : $publicSunshine" -ForegroundColor White;
           Write-Host "🌟 STARDESK TRUNG ID (0ms Delay): $sdId" -ForegroundColor Yellow;
           Write-Host "🔑 STARDESK TRUNG PIN           : $sdPin" -ForegroundColor Yellow;
           Write-Host "🖥️ REMOTE DESKTOP (RDP) HOST     : $rdpTarget" -ForegroundColor Magenta;
@@ -1293,42 +1337,46 @@ jobs:
           $sb = New-Object System.Text.StringBuilder;
           [void]$sb.AppendLine('# 🚀 Zenova Ultimate VPS (Windows) - Full Pro Max');
           [void]$sb.AppendLine('');
-          [void]$sb.AppendLine('### 🌐 1. Web Quản Lý & Sunshine Streaming');
-          [void]$sb.AppendLine("- **Web Quản Lý VPS**: [$publicWeb]($publicWeb)");
-          [void]$sb.AppendLine("- **Sunshine Web UI**: [$publicSunshine]($publicSunshine) (User: `zenova` | Pass: `$pass`)");
+          [void]$sb.AppendLine('### ☀️ 1. Sunshine Streaming & Web Quản Lý');
+          [void]$sb.AppendLine("- Sunshine Web UI (Qua Tailscale IP): $sunshineTsUrl (Khuyên dùng)");
+          [void]$sb.AppendLine("- Sunshine Web UI (Qua Cloudflare): $sunshineCfUrl");
+          [void]$sb.AppendLine("- Tài khoản: zenova | Mật khẩu: $pass");
+          [void]$sb.AppendLine("- Web Quản Lý VPS (Port 8080): $publicWeb");
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('---');
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('### 🌟 2. StarDesk Trung / GameViewer (0ms Delay - Khuyên Dùng)');
           [void]$sb.AppendLine('| Thông Tin | Giá Trị |');
           [void]$sb.AppendLine('|---|---|');
-          [void]$sb.AppendLine("| **Device ID** | ``$sdId`` |");
-          [void]$sb.AppendLine("| **Mã PIN** | ``$sdPin`` |");
+          [void]$sb.AppendLine("| Device ID | $sdId |");
+          [void]$sb.AppendLine("| Mã PIN | $sdPin |");
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('---');
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('### 🖥️ 3. Remote Desktop & Tailscale Mesh VPN');
           [void]$sb.AppendLine('| Mục | Thông Số |');
           [void]$sb.AppendLine('|---|---|');
-          [void]$sb.AppendLine("| **Địa chỉ RDP** | ``$rdpTarget`` |");
-          [void]$sb.AppendLine("| **IP Tailscale** | ``$tsIp`` |");
-          [void]$sb.AppendLine("| **IP Outbound Máy** | ``$pubIp`` |");
-          [void]$sb.AppendLine('| **User** | `zenova` |');
-          [void]$sb.AppendLine("| **Mật khẩu** | ``$pass`` |");
+          [void]$sb.AppendLine("| Địa chỉ RDP | $rdpTarget |");
+          [void]$sb.AppendLine("| IP Tailscale | $tsIp |");
+          [void]$sb.AppendLine("| IP Outbound Máy | $pubIp |");
+          [void]$sb.AppendLine('| User | zenova |');
+          [void]$sb.AppendLine("| Mật khẩu | $pass |");
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('---');
           [void]$sb.AppendLine('');
-          [void]$sb.AppendLine('### 📦 4. Ứng Dụng Đã Tải Sẵn Trong Downloads');
-          [void]$sb.AppendLine('- **Downloads / Apps**: Antigravity, AutoClicker, CloudCord, Discord, Microsoft Store, Minecraft Wallpaper, VS Code, Windhawk, Bloxstrap 120 FPS, PrismLauncher, Spotify, Bandicam, EVKey.');
-          Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($sb.ToString()) -Encoding UTF8;
+          [void]$sb.AppendLine('### 📦 4. Ứng Dụng Tải Sẵn Trong Thư Mục Downloads (Ổ C)');
+          [void]$sb.AppendLine('- Thư mục C:\Users\zenova\Downloads chứa đầy đủ 9 ứng dụng và công cụ từ app.');
+          if ($env:GITHUB_STEP_SUMMARY) {
+              Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($sb.ToString()) -Encoding UTF8;
+          }
 
-          [Console]::WriteLine("::notice title=THÔNG TIN KẾT NỐI ZENOVA VPS::StarDesk ID: $sdId | PIN: $sdPin | Sunshine: $publicSunshine | RDP: $rdpTarget | Web: $publicWeb");
+          [Console]::WriteLine("::notice title=THONG TIN KET NOI ZENOVA VPS::StarDesk ID: $sdId | PIN: $sdPin | Sunshine: $sunshineTsUrl | RDP: $rdpTarget | Web: $publicWeb");
 
           $global:LASTEXITCODE = 0;
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 15. DUY TRÌ PHIÊN LÀM VIỆC (KEEP-ALIVE)
+      # 16. DUY TRÌ PHIÊN LÀM VIỆC & LẮNG NGHE LỆNH TỪ WEB PANEL
       # ─────────────────────────────────────────────────────────────
       - name: ⏳ Duy trì phiên làm việc
         id: keepalive
@@ -1352,11 +1400,15 @@ jobs:
                   Remove-Item -Path "$sigFile" -Force -ErrorAction SilentlyContinue;
 
                   if ("$cmd" -eq 'SAVE_NOW') {
+                      Write-Host "💾 [WEB PANEL] Đã nhận lệnh lưu dữ liệu tức thì (Máy vẫn chạy, KHÔNG TẮT MÁY)..." -ForegroundColor Cyan;
                       if (Test-Path "$saveScript") { & "$saveScript" -Reason 'manual-web-save'; }
+                      Write-Host "✅ Đã lưu xong dữ liệu lên GitHub! VPS vẫn tiếp tục hoạt động." -ForegroundColor Green;
                   } elseif ("$cmd" -eq 'RESTART_SESSION') {
+                      Write-Host "🔁 [WEB PANEL] Đã nhận lệnh khởi động lại / chuyển tiếp phiên mới..." -ForegroundColor Yellow;
                       'FORCE_NEXT_SESSION=1' >> "$env:GITHUB_ENV";
                       break;
                   } elseif ("$cmd" -eq 'STOP_SESSION') {
+                      Write-Host "🛑 [WEB PANEL] Đã nhận lệnh dừng VPS hoàn toàn..." -ForegroundColor Red;
                       'FORCE_STOP_ONLY=1' >> "$env:GITHUB_ENV";
                       break;
                   }
@@ -1381,7 +1433,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 16. LƯU TOÀN BỘ DỮ LIỆU CUỐI PHIÊN
+      # 17. LƯU TOÀN BỘ DỮ LIỆU CUỐI PHIÊN
       # ─────────────────────────────────────────────────────────────
       - name: 💾 Lưu dữ liệu cuối phiên
         if: always()
@@ -1395,7 +1447,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 17. KÍCH HOẠT PHIÊN TIẾP THEO
+      # 18. KÍCH HOẠT PHIÊN TIẾP THEO
       # ─────────────────────────────────────────────────────────────
       - name: 🔁 Kích hoạt phiên tiếp theo
         if: always()
@@ -1406,7 +1458,7 @@ jobs:
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
           if ("$env:FORCE_STOP_ONLY" -eq '1') {
-              Write-Host "🛑 Đã ngắt VPS." -ForegroundColor Yellow;
+              Write-Host "🛑 Đã ngắt VPS theo yêu cầu người dùng. Không khởi động lại." -ForegroundColor Yellow;
               exit 0;
           }
           if (("$env:AUTO_RESTART" -eq 'true') -or ("$env:FORCE_NEXT_SESSION" -eq '1')) {
@@ -1420,8 +1472,8 @@ jobs:
                       -f pin_code="$env:INPUT_PIN_CODE" `
                       -f drive_letter="$env:MOUNT_LETTER" `
                       -f vhd_size_gb="$env:VHD_SIZE_GB" `
-                      -f windows_image="${{ github.event.inputs.windows_image || 'windows-2025' }}" 2>&1 | Out-Null;
-                  Write-Host "✅ Kích hoạt phiên mới thành công!" -ForegroundColor Green;
+                      -f windows_image="${{ github.event.inputs.windows_image || 'windows-2022' }}" 2>&1 | Out-Null;
+                  Write-Host "✅ Kích hoạt phiên mới thành công cho $wfFile!" -ForegroundColor Green;
               } catch {}
           }
           $global:LASTEXITCODE = 0;
