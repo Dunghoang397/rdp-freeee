@@ -22,6 +22,9 @@ on:
           - '1h'
           - '3h'
           - '5h'
+          - '6h'
+          - '12h'
+          - '24h'
       auto_restart:
         description: '🔁 Tự khởi động phiên mới & lưu dữ liệu cho phiên mới'
         required: false
@@ -161,7 +164,6 @@ jobs:
           "STATE_BRANCH=$stateBranch" >> "$env:GITHUB_ENV";
           "ROOT_RELEASE_TAG=$rootRelTag" >> "$env:GITHUB_ENV";
 
-          # Hỗ trợ cấu hình thời gian linh hoạt (1h, 3h, 5h, 6h, 12h, 24h)
           $total = 300;
           $display = '5 giờ';
           switch ("$env:INPUT_DURATION") {
@@ -189,7 +191,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$vhdContainer" -ErrorAction SilentlyContinue | Out-Null;
           $vhdFile = [System.IO.Path]::Combine("$vhdContainer", 'zenova-os.vhdx');
 
-          # Xử lý dung lượng TB / GB linh hoạt tối đa 60TB
           $rawSize = ("$env:VHD_SIZE_GB").Trim().ToUpper();
           $sizeBytes = 100GB;
           
@@ -263,7 +264,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 2. TẠO SCRIPT ĐÓNG GÓI & LƯU TRỮ DỮ LIỆU
+      # 2. TẠO SCRIPT ĐÓNG GÓI & LƯU TRỮ DỮ LIỆU (SIÊU TỐC, KO TẮT MÁY)
       # ─────────────────────────────────────────────────────────────
       - name: 🧰 Tạo script đóng gói & lưu trữ dữ liệu
         shell: pwsh
@@ -302,7 +303,7 @@ jobs:
               'if (Test-Path "$out7zDir") { Remove-Item -Path "$out7zDir" -Recurse -Force -ErrorAction SilentlyContinue; }',
               'New-Item -ItemType Directory -Force -Path "$out7zDir" -ErrorAction SilentlyContinue | Out-Null;',
               '$outPrefix = [System.IO.Path]::Combine($out7zDir, "zenova-drive.7z");',
-              '& 7z a -t7z -m0=lzma2 -mx=3 -md=32m -mfb=32 -ms=on -v1900m "$outPrefix" "$stage\*" *>$null;',
+              '& 7z a -t7z -m0=lzma2 -mx=1 -md=16m -mfb=32 -ms=on -mmt=on -v1900m "$outPrefix" "$stage\*" *>$null;',
               '$chunks = Get-ChildItem -Path "$out7zDir" -Filter "zenova-drive.7z.*" | Sort-Object Name;',
               'if ($chunks.Count -gt 0) {',
               '    $manifest = [PSCustomObject]@{ machineId = "$env:MACHINE_ID"; savedAt = [DateTimeOffset]::UtcNow.ToString("o"); chunkCount = $chunks.Count; reason = $Reason; };',
@@ -322,7 +323,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 3. TẠO SCRIPT ĐỒNG BỘ TRẠNG THÁI MÁY LÊN GIT
+      # 3. TẠO SCRIPT ĐỒNG BỘ TRẠNG THÁI MÁY LÊN GIT (WEB PANEL DATA)
       # ─────────────────────────────────────────────────────────────
       - name: 🧰 Tạo script đồng bộ trạng thái máy lên Git
         shell: pwsh
@@ -334,7 +335,7 @@ jobs:
           $lines = @(
               '$ErrorActionPreference = "Continue";',
               '$global:LASTEXITCODE = 0;',
-              '$state = [PSCustomObject]@{ machineId = "$env:MACHINE_ID"; displayName = "$env:DISPLAY_NAME"; lastSeen = [DateTimeOffset]::UtcNow.ToString("o"); releaseTag = "$env:RELEASE_TAG"; tailscaleIp = if (Test-Path "C:\tailscale-ip.txt") { (Get-Content "C:\tailscale-ip.txt" -Raw).Trim() } else { "" }; stardeskId = if (Test-Path "C:\stardesk-id.txt") { (Get-Content "C:\stardesk-id.txt" -Raw).Trim() } else { "" }; cloudflareWeb = if (Test-Path "C:\cloudflared-web-url.txt") { (Get-Content "C:\cloudflared-web-url.txt" -Raw).Trim() } else { "" }; cloudflareApollo = if (Test-Path "C:\cloudflared-apollo-url.txt") { (Get-Content "C:\cloudflared-apollo-url.txt" -Raw).Trim() } else { "" }; };',
+              '$state = [PSCustomObject]@{ machineId = "$env:MACHINE_ID"; displayName = "$env:DISPLAY_NAME"; lastSeen = [DateTimeOffset]::UtcNow.ToString("o"); releaseTag = "$env:RELEASE_TAG"; tailscaleIp = if (Test-Path "C:\tailscale-ip.txt") { (Get-Content "C:\tailscale-ip.txt" -Raw).Trim() } else { "" }; stardeskId = if (Test-Path "C:\stardesk-id.txt") { (Get-Content "C:\stardesk-id.txt" -Raw).Trim() } else { "" }; stardeskPin = if (Test-Path "C:\stardesk-pin.txt") { (Get-Content "C:\stardesk-pin.txt" -Raw).Trim() } else { "Zenova2026" }; cloudflareWeb = if (Test-Path "C:\cloudflared-web-url.txt") { (Get-Content "C:\cloudflared-web-url.txt" -Raw).Trim() } else { "" }; cloudflareApollo = if (Test-Path "C:\cloudflared-apollo-url.txt") { (Get-Content "C:\cloudflared-apollo-url.txt" -Raw).Trim() } else { "" }; };',
               '$state | ConvertTo-Json -Depth 5 | Set-Content -Path "$env:STATE_JSON_FILE" -Encoding UTF8;',
               '$stateRepoDir = [System.IO.Path]::Combine("$env:RUNNER_TEMP", "state-repo");',
               'if (-not (Test-Path "$stateRepoDir")) {',
@@ -441,7 +442,7 @@ jobs:
           $firstChunk = [System.IO.Path]::Combine("$dlDir", 'zenova-drive.7z.001');
           if (Test-Path "$firstChunk") {
               Write-Host "📦 Đang giải nén dữ liệu vào ${dl}:\..." -ForegroundColor Cyan;
-              & 7z x "$firstChunk" "-o${dl}:\" -y *>$null;
+              & 7z x "$firstChunk" "-o${dl}:\" -y -mmt=on *>$null;
           }
 
           $global:LASTEXITCODE = 0;
@@ -714,7 +715,6 @@ jobs:
           $global:LASTEXITCODE   = 0;
           Write-Host "🖥️🔊🚀 Cài Driver Ảo & Apollo Streaming (Tối ưu siêu tốc)..." -ForegroundColor Cyan;
 
-          # Tải song song driver & Apollo official msi
           $dl7 = @(
               '--url', 'https://www.amyuni.com/downloads/usbmmidd_v2.zip', '-o', "$env:TEMP\usbmmidd_v2.zip",
               '--url', 'https://download.vb-audio.com/Download_EXTERNAL/VBCABLE_Driver_Pack43.zip', '-o', "$env:TEMP\VBCable.zip",
@@ -791,7 +791,6 @@ jobs:
               if (Test-Path "$apMsi") {
                   Start-Process msiexec.exe -ArgumentList "/i `"$apMsi`" /qn /norestart" -Wait;
               }
-              # Apollo thường cài ở C:\Program Files\Apollo
               $apolloExe = 'C:\Program Files\Apollo\apollo.exe';
               if (-not (Test-Path $apolloExe)) {
                   $apolloExe = (Get-ChildItem -Path 'C:\Program Files\Apollo' -Filter '*.exe' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'Apollo|Sunshine' } | Select-Object -First 1).FullName
@@ -804,9 +803,8 @@ jobs:
                   & "$apolloExe" --creds zenova "$pass" 2>&1 | Out-Null;
               }
 
-              # Cấu hình Apollo ultra low latency
               $apDir = "C:\Program Files\Apollo\config";
-              if (-not (Test-Path $apDir)) { $apDir = "C:\Program Files\Sunshine\config" } # Fallback
+              if (-not (Test-Path $apDir)) { $apDir = "C:\Program Files\Sunshine\config" }
               New-Item -ItemType Directory -Force -Path $apDir -ErrorAction SilentlyContinue | Out-Null;
               $apConf = "origin_pin_allowed = pc`r`nupnp = disabled`r`nencoder = nvenc`r`nnvenc_preset = p1`r`nlatency = ultra_low`r`npacket_size = 1024`r`nfec_percentage = 20`r`nfps = [60, 120]`r`n";
               Set-Content -Path "$apDir\sunshine.conf" -Value $apConf -Encoding UTF8 -Force;
@@ -835,14 +833,14 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 10. TẢI TRỌN BỘ APP VÀO C:\Apps & DOWNLOADS (KHÔNG HÌNH NỀN)
+      # 10. TẢI TRỌN BỘ APP VÀO C:\Apps & DOWNLOADS (ĐÃ BỎ DISCORD)
       # ─────────────────────────────────────────────────────────────
       - name: 📦 Tải trọn bộ App vào C:\Apps và Downloads
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
-          Write-Host "📦 ĐANG TẢI & CÀI ĐẶT TRỌN BỘ ỨNG DỤNG..." -ForegroundColor Cyan;
+          Write-Host "📦 ĐANG TẢI & CÀI ĐẶT TRỌN BỘ ỨNG DỤNG (KHÔNG CÓ DISCORD)..." -ForegroundColor Cyan;
           
           $dl = "$env:MOUNT_LETTER";
           $allDownloadFolders = @(
@@ -878,7 +876,6 @@ jobs:
           $sdInstaller  = 'C:\StarDesk_1.5.3.exe';
           $gvInstaller  = 'C:\uuyc_4.43.1.exe';
           $evZip        = "$env:TEMP\EVKey.zip";
-          $dcInstaller  = "$env:TEMP\DiscordSetup.exe";
           $spInstaller  = "$env:TEMP\SpotifySetup.exe";
           $bdInstaller  = "$env:TEMP\bdcamsetup.exe";
           $bloxExe      = 'C:\Bloxstrap\Bloxstrap.exe';
@@ -897,7 +894,6 @@ jobs:
               '--url', 'https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe', '-o', "$net8Exe",
               '--url', 'https://github.com/bloxstraplabs/bloxstrap/releases/download/v2.7.0/Bloxstrap-v2.7.0.exe', '-o', "$bloxExe",
               '--url', 'https://github.com/Diegiwg/PrismLauncher-Cracked/releases/download/11.0.3/PrismLauncher-Windows-MSVC-Portable-11.0.3.zip', '-o', "$mcZip",
-              '--url', 'https://discord.com/api/downloads/distributions/app/installers/latest?channel=stable&platform=win&arch=x64', '-o', "$dcInstaller",
               '--url', 'https://download.scdn.co/SpotifySetup.exe', '-o', "$spInstaller",
               '--url', 'https://dl.bandicam.com/bdcamsetup.exe', '-o', "$bdInstaller",
               '--url', 'https://update.code.visualstudio.com/latest/win32-x64-user/stable', '-o', "$vsCodeSetup",
@@ -969,10 +965,8 @@ jobs:
               } catch {}
           }
 
-          # Discord, Spotify, Bandicam
+          # Spotify & Bandicam
           try {
-              Stop-Process -Name Discord, Update -Force -ErrorAction SilentlyContinue;
-              if (Test-Path "$dcInstaller") { Start-Process -FilePath "$dcInstaller" -ArgumentList "-s" -Wait -ErrorAction SilentlyContinue; }
               if (Test-Path "$spInstaller") { Start-Process -FilePath "$spInstaller" -ArgumentList '/silent' -ErrorAction SilentlyContinue; }
               if (Test-Path "$bdInstaller") { Start-Process -FilePath "$bdInstaller" -ArgumentList '/S' -ErrorAction SilentlyContinue; }
           } catch {}
@@ -1002,7 +996,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 11. LẤY DEVICE ID STARDESK TRUNG NGAY LẬP TỨC
+      # 11. LẤY DEVICE ID STARDESK TRUNG NGAY LẬP TỨC (FIX TRIỆT ĐỂ)
       # ─────────────────────────────────────────────────────────────
       - name: 🔑 Cấu hình PIN StarDesk Trung & Lấy Device ID Lập tức
         shell: pwsh
@@ -1023,7 +1017,7 @@ jobs:
           if ($sdExe) {
               Start-Process -FilePath "$sdExe" -WorkingDirectory (Split-Path $sdExe) -WindowStyle Hidden -ErrorAction SilentlyContinue;
               Write-Host "│ ✅ Đã khởi chạy StarDesk.exe, chờ lấy ID..." -ForegroundColor Green;
-              Start-Sleep -Seconds 15; # Chờ 15 giây để app khởi tạo và lưu ID
+              Start-Sleep -Seconds 20; # Tăng thời gian chờ lên 20s để app kịp kết nối máy chủ Trung Quốc
               Stop-Process -Name "StarDesk" -Force -ErrorAction SilentlyContinue; # Tắt app để tránh chiếm file
           }
 
@@ -1031,7 +1025,7 @@ jobs:
           if (Test-Path "$gvCli") {
               & "$gvCli" -c "$cleanPin" *> $null;
               if ([string]::IsNullOrWhiteSpace("$sdId")) {
-                  for ($i = 0; $i -lt 10; $i++) {
+                  for ($i = 0; $i -lt 15; $i++) {
                       $cliOut = & "$gvCli" -d 2>$null;
                       if ($cliOut -match '(\d{6,12})') { $sdId = $Matches[1]; break; }
                       Start-Sleep -Seconds 1;
@@ -1082,7 +1076,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 12. TẠO ICON DESKTOP ĐẦY ĐỦ TIỆN ÍCH
+      # 12. TẠO ICON DESKTOP ĐẦY ĐỦ TIỆN ÍCH (FIX LỖI EMOJI TRONG TÊN FILE)
       # ─────────────────────────────────────────────────────────────
       - name: 🖥️ Tạo các phím tắt tiện ích trên Desktop
         shell: pwsh
@@ -1097,57 +1091,47 @@ jobs:
           foreach ($d in $desktops) {
               if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d -ErrorAction SilentlyContinue | Out-Null; }
 
-              # 1. StarDesk Trung
+              # 1. StarDesk Trung (Bỏ Emoji)
               $sdExe = (Get-ChildItem -Path @("C:\Program Files\StarDesk", "C:\Program Files (x86)\StarDesk") -Filter "StarDesk.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
               if ($sdExe) {
-                  $lnkGv = $ws.CreateShortcut("$d\🌟 StarDesk Trung (0ms Delay).lnk");
+                  $lnkGv = $ws.CreateShortcut("$d\StarDesk-Trung.lnk");
                   $lnkGv.TargetPath = $sdExe;
                   $lnkGv.Save();
               }
 
-              # 2. Kho Ứng Dụng (Downloads & C:\Apps)
-              $lnkApps = $ws.CreateShortcut("$d\📁 Kho Ứng Dụng (Downloads).lnk");
+              # 2. Kho Ứng Dụng (Bỏ Emoji)
+              $lnkApps = $ws.CreateShortcut("$d\Kho-Ung-Dung.lnk");
               $lnkApps.TargetPath = "C:\Users\zenova\Downloads";
               $lnkApps.Save();
 
-              # 3. Spotify
+              # 3. Spotify (Bỏ Emoji)
               $spExe = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Roaming\Spotify", "C:\Users\zenova\AppData\Roaming\Spotify") -Filter "Spotify.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
               if ($spExe) {
-                  $lnkSp = $ws.CreateShortcut("$d\🎵 Spotify.lnk");
+                  $lnkSp = $ws.CreateShortcut("$d\Spotify.lnk");
                   $lnkSp.TargetPath = $spExe;
                   $lnkSp.Save();
               }
 
-              # 4. Discord
-              $dcExe = (Get-ChildItem -Path @("C:\Users\runneradmin\AppData\Local\Discord", "C:\Users\zenova\AppData\Local\Discord") -Filter "Discord.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*app-*" } | Select-Object -First 1).FullName;
-              if ($dcExe) {
-                  $lnkDc = $ws.CreateShortcut("$d\💬 Discord.lnk");
-                  $lnkDc.TargetPath = $dcExe;
-                  $lnkDc.Arguments = "--disable-gpu --no-sandbox";
-                  $lnkDc.WorkingDirectory = Split-Path $dcExe;
-                  $lnkDc.Save();
-              }
-
-              # 5. Roblox Bloxstrap
+              # 4. Roblox Bloxstrap (Bỏ Emoji)
               $bloxExe = "C:\Bloxstrap\Bloxstrap.exe";
               if (Test-Path $bloxExe) {
-                  $lnkRb = $ws.CreateShortcut("$d\🎮 Roblox (Bloxstrap 120 FPS).lnk");
+                  $lnkRb = $ws.CreateShortcut("$d\Roblox-Bloxstrap.lnk");
                   $lnkRb.TargetPath = $bloxExe;
                   $lnkRb.Save();
               }
 
-              # 6. AutoClicker
+              # 5. AutoClicker (Bỏ Emoji)
               $acExe = "C:\Users\zenova\Downloads\AutoClicker.exe";
               if (Test-Path $acExe) {
-                  $lnkAc = $ws.CreateShortcut("$d\⚡ AutoClicker.lnk");
+                  $lnkAc = $ws.CreateShortcut("$d\AutoClicker.lnk");
                   $lnkAc.TargetPath = $acExe;
                   $lnkAc.Save();
               }
 
-              # 7. EVKey
+              # 6. EVKey (Bỏ Emoji)
               $evkExe = "C:\EVKey\EVKey64.exe";
               if (Test-Path $evkExe) {
-                  $lnkEvk = $ws.CreateShortcut("$d\🇻🇳 EVKey Tiếng Việt.lnk");
+                  $lnkEvk = $ws.CreateShortcut("$d\EVKey-Tieng-Viet.lnk");
                   $lnkEvk.TargetPath = $evkExe;
                   $lnkEvk.Save();
               }
@@ -1158,7 +1142,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 13. KHỞI CHẠY WEB QUẢN LÝ (PORT 8080) & APOLLO TUNNEL
+      # 13. KHỞI CHẠY WEB QUẢN LÝ VPS (PORT 8080) & APOLLO TUNNEL
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Khởi chạy Web Quản Lý VPS (Port 8080) & Apollo Tunnel
         shell: pwsh
@@ -1167,7 +1151,6 @@ jobs:
           $global:LASTEXITCODE   = 0;
           Write-Host "🌐 Khởi chạy Web Quản Lý VPS & Tunnel Apollo..." -ForegroundColor Cyan;
           
-          # Đảm bảo Python có sẵn
           $pyExe = (Get-Command python -ErrorAction SilentlyContinue).Source;
           if (-not $pyExe) {
               Write-Host "│ ⚠️ Không tìm thấy Python! Đang tải Python Portable..." -ForegroundColor Yellow;
@@ -1292,7 +1275,7 @@ jobs:
           [void]$sb.AppendLine('---');
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('### 📦 4. Ứng Dụng Đã Tải Sẵn Trong `C:\Apps` và `Downloads`');
-          [void]$sb.AppendLine('- **Downloads / Apps**: Antigravity, AutoClicker, CloudCord, Discord, Microsoft Store, Minecraft Wallpaper, VS Code, Windhawk, Bloxstrap 120 FPS, PrismLauncher, Spotify, Bandicam, EVKey.');
+          [void]$sb.AppendLine('- **Downloads / Apps**: Antigravity, AutoClicker, CloudCord, Microsoft Store, Minecraft Wallpaper, VS Code, Windhawk, Bloxstrap 120 FPS, PrismLauncher, Spotify, Bandicam, EVKey.');
           Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($sb.ToString()) -Encoding UTF8;
 
           [Console]::WriteLine("::notice title=THÔNG TIN KẾT NỐI ZENOVA VPS::StarDesk ID: $sdId | PIN: $sdPin | Apollo: $publicApollo | RDP: $rdpTarget | Web: $publicWeb");
@@ -1354,7 +1337,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 16. LƯU TOÀN BỘ DỮ LIỆU CUỐI PHIÊN
+      # 16. LƯU TOÀN BỘ DỮ LIỆU CUỐI PHIÊN (KHÔNG TẮT MÁY)
       # ─────────────────────────────────────────────────────────────
       - name: 💾 Lưu dữ liệu cuối phiên
         if: always()
