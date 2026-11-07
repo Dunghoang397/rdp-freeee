@@ -72,7 +72,6 @@ on:
         required: false
         default: ''
         type: string
-      # Giữ input này để tương thích ngược, nhưng nếu dùng OAuth sẽ KHÔNG cần
       tailscale_authkey:
         description: '🔑 (Không dùng nữa - đã chuyển sang OAuth) Key Tailscale Auth'
         required: false
@@ -118,7 +117,7 @@ on:
 permissions:
   contents: write
   actions: write
-  id-token: write   # ✅ Cần cho Tailscale OAuth
+  id-token: write
 
 jobs:
   # =========================================================================
@@ -151,7 +150,7 @@ jobs:
 
     steps:
       # ─────────────────────────────────────────────────────────────
-      # 1. DỰNG Ổ ĐĨA RIÊNG & CHUẨN BỊ THÔNG SỐ
+      # 1. DỰNG Ổ ĐĨA RIÊNG
       # ─────────────────────────────────────────────────────────────
       - name: 🧱 Dựng ổ đĩa riêng & Chuẩn bị thông số
         shell: pwsh
@@ -448,7 +447,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 5. TẠO USER & TỐI ƯU
+      # 5. TẠO USER & TỐI ƯU (BƯỚC NÀY SẼ TẮT HVCI)
       # ─────────────────────────────────────────────────────────────
       - name: ⚙️ Tạo User Zenova & Tối ưu tối thượng
         shell: pwsh
@@ -458,6 +457,18 @@ jobs:
           $ErrorActionPreference = 'Continue';
           $global:LASTEXITCODE   = 0;
           Write-Host "⚙️ ĐANG THIẾT LẬP USER ZENOVA & TỐI ƯU TOÀN DIỆN..." -ForegroundColor Yellow;
+
+          # ✅ FIX VB-CABLE: Tắt Memory Integrity (HVCI) để driver có thể nạp
+          Write-Host "🛡️ Đang tắt bảo vệ Memory Integrity (HVCI) cho phép cài Driver Âm thanh..." -ForegroundColor DarkGray;
+          try {
+              $dgPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity';
+              New-Item -Path $dgPath -Force -ErrorAction SilentlyContinue | Out-Null;
+              Set-ItemProperty -Path $dgPath -Name 'Enabled' -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue;
+              bcdedit /set hypervisorlaunchtype off 2>&1 | Out-Null;
+              Write-Host "│ ✅ Đã tắt HVCI!" -ForegroundColor Green;
+          } catch {
+              Write-Host "│ ⚠️ Không tắt được HVCI tự động (Bỏ qua)" -ForegroundColor Yellow;
+          }
 
           try {
               $secCfg = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'secpol.cfg');
@@ -506,8 +517,6 @@ jobs:
           Set-ItemProperty -Path $winlogon -Name 'DefaultUserName' -Value $user -Force -ErrorAction SilentlyContinue;
           Set-ItemProperty -Path $winlogon -Name 'DefaultPassword' -Value $pass -Force -ErrorAction SilentlyContinue;
 
-          Write-Host "🚀 Đang tối ưu CPU, tắt PowerThrottling, tối ưu TCP/IP giảm ping..." -ForegroundColor Cyan;
-
           $ptPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling';
           New-Item -Path $ptPath -Force -ErrorAction SilentlyContinue | Out-Null;
           Set-ItemProperty -Path $ptPath -Name 'PowerThrottlingOff' -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue;
@@ -526,7 +535,7 @@ jobs:
               Set-MpPreference -DisableRealtimeMonitoring $true -DisableBehaviorMonitoring $true -DisableIOAVProtection $true -DisableScriptScanning $true -ErrorAction SilentlyContinue;
           } catch {}
 
-          # KHÔNG tắt Audiosrv/AudioEndpointBuilder (để âm thanh hoạt động)
+          # KHÔNG tắt Audiosrv/AudioEndpointBuilder
           $servicesToKill = @(
               'WSearch', 'SysMain', 'wuauserv', 'UsoSvc', 'DiagTrack',
               'dmwappushservice', 'WerSvc', 'PcaSvc', 'DPS'
@@ -590,7 +599,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 7. ✅ TAILSCALE QUA GITHUB ACTION CHÍNH THỨC
+      # 7. ✅ TAILSCALE QUA GITHUB ACTION CHÍNH THỨC (ĐÃ XÓA ARGS TRÙNG)
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Kết nối Tailscale (Official GitHub Action - OAuth)
         uses: tailscale/github-action@v4
@@ -599,9 +608,8 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
-          # Hostname tự động từ runner
           version: latest
-          args: --accept-routes --unattended=true
+          # ✅ ĐÃ XÓA DÒNG args: --accept-routes --unattended=true (vì gây trùng lặp tham số)
 
       - name: 🌐 Lưu Tailscale IP vào file
         shell: pwsh
@@ -637,7 +645,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 8. NGROK RDP (tùy chọn)
+      # 8. NGROK RDP
       # ─────────────────────────────────────────────────────────────
       - name: 🌐 Ngrok RDP Tunnel (tùy chọn)
         shell: pwsh
@@ -679,7 +687,7 @@ jobs:
           exit 0;
 
       # ─────────────────────────────────────────────────────────────
-      # 9. ✅ CÀI VDD + VB-CABLE (OFFICIAL SETUP) + SUNSHINE
+      # 9. ✅ CÀI VDD + VB-CABLE + SUNSHINE (BẢN VÁ LỖI ÂM THANH)
       # ─────────────────────────────────────────────────────────────
       - name: 🖥️🔊☀️ Cài Driver Màn Hình Ảo, Âm Thanh Ảo (Official) & Sunshine
         shell: pwsh
@@ -695,9 +703,7 @@ jobs:
           );
           & curl.exe -L -s --retry 2 -Z @dl7;
 
-          # ─────────────────────────────────────────────
           # 1. MÀN HÌNH ẢO USBMMIDD v2
-          # ─────────────────────────────────────────────
           try {
               $zip = "$env:TEMP\usbmmidd_v2.zip";
               if (Test-Path "$zip") {
@@ -714,12 +720,8 @@ jobs:
               }
           } catch {}
 
-          # ─────────────────────────────────────────────
-          # 2. ✅ VB-CABLE QUA TRÌNH CÀI ĐẶT CHÍNH THỨC
-          # ─────────────────────────────────────────────
+          # 2. CÀI ĐẶT VB-CABLE
           Write-Host "│ 🔊 Đang cài đặt VB-Cable Audio Driver (Official Setup)..." -ForegroundColor Cyan;
-
-          # Đảm bảo Audio Services chạy
           foreach ($svcName in @('Audiosrv', 'AudioEndpointBuilder', 'MMCSS')) {
               try {
                   Set-Service -Name $svcName -StartupType Automatic -ErrorAction SilentlyContinue
@@ -736,7 +738,6 @@ jobs:
                   if (Test-Path 'C:\VBCable') { Remove-Item 'C:\VBCable' -Recurse -Force -ErrorAction SilentlyContinue }
                   Expand-Archive -Path "$vbZip" -DestinationPath 'C:\VBCable' -Force
 
-                  # ✅ Sử dụng VBCABLE_Setup_x64.exe chính thức
                   $vbSetup = Get-ChildItem -Path 'C:\VBCable' -Filter 'VBCABLE_Setup_x64.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
                   if ($vbSetup) {
                       Write-Host "│    ℹ️ Đang chạy: $($vbSetup.FullName)" -ForegroundColor Gray
@@ -756,7 +757,6 @@ jobs:
                   & pnputil.exe /scan-devices 2>&1 | Out-Null
                   Start-Sleep -Seconds 2
 
-                  # Kiểm tra thiết bị
                   $audioDevs = Get-PnpDevice -Class 'AudioEndpoint' -ErrorAction SilentlyContinue
                   $vbDev = $audioDevs | Where-Object { $_.FriendlyName -match 'CABLE|VB-Audio' }
                   if ($vbDev) {
@@ -772,9 +772,7 @@ jobs:
               Write-Host "│    ❌ Lỗi cài VB-Cable: $_" -ForegroundColor Red
           }
 
-          # ─────────────────────────────────────────────
           # 2.5. SET VB-CABLE LÀM DEFAULT (AudioDeviceCmdlets)
-          # ─────────────────────────────────────────────
           Write-Host "│ 🔊 Đang set VB-Cable làm thiết bị phát mặc định..." -ForegroundColor Cyan;
           try {
               if (-not (Get-Module -ListAvailable -Name AudioDeviceCmdlets)) {
@@ -829,22 +827,13 @@ jobs:
               Write-Host "│    ❌ Lỗi set default audio: $_" -ForegroundColor Red
           }
 
-          # Restart audio services
           foreach ($svcName in @('AudioEndpointBuilder', 'Audiosrv')) {
-              try {
-                  Restart-Service -Name $svcName -Force -ErrorAction SilentlyContinue
-              } catch {}
+              try { Restart-Service -Name $svcName -Force -ErrorAction SilentlyContinue } catch {}
           }
 
-          # Test beep
-          try {
-              [console]::beep(800, 200)
-              Write-Host "│    ✅ Test beep OK" -ForegroundColor Green
-          } catch {}
+          try { [console]::beep(800, 200); Write-Host "│    ✅ Test beep OK" -ForegroundColor Green } catch {}
 
-          # ─────────────────────────────────────────────
           # 3. SUNSHINE
-          # ─────────────────────────────────────────────
           try {
               $sunMsi = "$env:TEMP\Sunshine.msi";
               if (Test-Path "$sunMsi") {
@@ -861,9 +850,7 @@ jobs:
               Write-Host "│ ✅ Sunshine Streaming Server sẵn sàng tại cổng 47990!" -ForegroundColor Green;
           } catch {}
 
-          # ─────────────────────────────────────────────
-          # 4. ĐỘ PHÂN GIẢI 1920x1080
-          # ─────────────────────────────────────────────
+          # 4. ĐỘ PHÂN GIẢI
           try {
               if (Get-Command Set-DisplayResolution -ErrorAction SilentlyContinue) {
                   Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction SilentlyContinue;
@@ -1384,7 +1371,6 @@ jobs:
       - name: 📦 Cài ứng dụng Linux
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends vlc
-          # Virtual audio sink
           pactl load-module module-null-sink sink_name=ZenovaVirtual sink_properties=device.description=ZenovaVirtual 2>/dev/null || true
 
       - name: 🌐 Tailscale Linux (Official Action)
@@ -1394,7 +1380,7 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
-          args: --accept-routes
+          version: latest
 
       - name: 🌐 Khởi chạy Web Quản Lý Linux
         run: |
