@@ -108,7 +108,7 @@ jobs:
   # =========================================================================
   Zenova-Windows:
     name: '🪟 Windows VPS (RDP + Apollo + StarDesk Trung)'
-    runs-on: [self-hosted, windows, x64]
+    runs-on: ${{ github.event.inputs.windows_image || 'windows-2025' }}
     timeout-minutes: 350
 
     env:
