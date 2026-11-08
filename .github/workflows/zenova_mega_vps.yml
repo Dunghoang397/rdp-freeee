@@ -112,7 +112,6 @@ permissions:
 jobs:
   Zenova-Windows:
     name: '🪟 Windows VPS (RDP + Apollo + StarDesk Trung)'
-    # ✅ FIX LỖI TREO: Chạy trên máy chủ GitHub, không dùng self-hosted
     runs-on: ${{ github.event.inputs.windows_image || 'windows-2025' }}
     timeout-minutes: 355
 
@@ -141,7 +140,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 🔎 Kiểm tra công cụ trên Windows host
-        # ✅ FIX LỖI ENCODING: Dùng pwsh thay vì powershell
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop';
@@ -210,20 +208,14 @@ jobs:
           if ($rawSize -match '^(\d+)\s*TB$') {
               $tbValue = [int64]$Matches[1];
               $sizeBytes = $tbValue * 1TB;
-              Write-Host "📦 Phát hiện dung lượng: $tbValue TB" -ForegroundColor Cyan;
           } elseif ($rawSize -match '^(\d+)\s*GB$') {
               $sizeBytes = ([int64]$Matches[1]) * 1GB;
-              Write-Host "📦 Phát hiện dung lượng: $($Matches[1]) GB" -ForegroundColor Cyan;
           } elseif ($rawSize -match '^(\d+)$') {
               $sizeBytes = ([int64]$Matches[1]) * 1GB;
-              Write-Host "📦 Phát hiện dung lượng: $($Matches[1]) GB (mặc định)" -ForegroundColor Cyan;
           }
 
           $maxBytes = 60TB;
-          if ($sizeBytes -gt $maxBytes) {
-              $sizeBytes = $maxBytes;
-              Write-Host "⚠️ Giới hạn tối đa 60TB!" -ForegroundColor Yellow;
-          }
+          if ($sizeBytes -gt $maxBytes) { $sizeBytes = $maxBytes; }
 
           Write-Host "💽 Đang khởi tạo ổ đĩa riêng ${dl}:\ ($(($sizeBytes / 1TB).ToString('0.##')) TB Dynamic VHDX)..." -ForegroundColor Cyan;
           
@@ -238,9 +230,7 @@ jobs:
                   $null = Get-PSDrive -Name "$dl" -ErrorAction Stop;
                   if (Test-Path "${dl}:\") { $mounted = $true; }
               }
-          } catch {
-              Write-Host "⚠️ Fallback sang cơ chế Kernel DOS Devices cho ${dl}:\..." -ForegroundColor Yellow;
-          }
+          } catch {}
 
           if (-not ($mounted)) {
               $fallbackDir = [System.IO.Path]::Combine("$vhdContainer", 'VIRTUAL-DRIVE-ROOT');
@@ -276,54 +266,77 @@ jobs:
           $global:LASTEXITCODE = 0;
           exit 0;
 
-      - name: 🧰 Tạo script đóng gói & lưu trữ dữ liệu
+      - name: 🧰 Tạo script đóng gói & lưu trữ dữ liệu (Siêu tốc, bỏ qua file lớn)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
-          $global:LASTEXITCODE   = 0;
+          $global:LASTEXITCODE = 0;
           $saveScriptPath = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'save-zenova-drive.ps1');
 
           $scriptLines = @(
               'param([string]$Reason = "manual")',
               '$ErrorActionPreference = "Continue";',
               '$global:LASTEXITCODE = 0;',
-              'Write-Host "💾 [$Reason] Đang đóng gói và lưu toàn bộ dữ liệu..." -ForegroundColor Cyan;',
-              '$appsToClose = @("chrome", "msedge", "brave", "firefox", "Spotify", "Bandicam", "EVKey", "RobloxPlayerBeta", "StarDesk", "GameViewer", "prismlauncher", "javaw", "Code");',
-              'foreach ($app in $appsToClose) {',
-              '    Get-Process -Name "$app*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;',
-              '    taskkill.exe /F /IM "$app*.exe" /T 2>$null | Out-Null;',
-              '};',
+              '$sw = [System.Diagnostics.Stopwatch]::StartNew();',
+              'function Log { param($m) Write-Host "  [$($sw.Elapsed.ToString("mm\:ss"))] $m" -ForegroundColor Gray }',
+              'Write-Host "💾 [$Reason] Bắt đầu lưu dữ liệu..." -ForegroundColor Cyan;',
+              '',
+              'Log "Bước 1: Tắt app đang chạy...";',
+              '$apps = @("chrome","msedge","brave","firefox","Spotify","Bandicam","EVKey","RobloxPlayerBeta","StarDesk","GameViewer","prismlauncher","javaw","Code","python","pythonw","node");',
+              'foreach ($a in $apps) { Get-Process -Name "$a*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue; }',
               'Start-Sleep -Seconds 2;',
+              '',
+              'Log "Bước 2: Stage dữ liệu hệ thống (bỏ qua X:\Downloads)...";',
               '$stage = [System.IO.Path]::Combine("$env:VHD_CONTAINER", "save-stage");',
               'if (Test-Path "$stage") { Remove-Item -Path "$stage" -Recurse -Force -ErrorAction SilentlyContinue; }',
-              'New-Item -ItemType Directory -Force -Path "$stage" -ErrorAction SilentlyContinue | Out-Null;',
-              'robocopy "$env:SHARED_ROOT" "$stage" /E /XJ /R:1 /W:1 /MT:8 /NFL /NDL /NJH /NJS /NP *> $null;',
+              'New-Item -ItemType Directory -Force -Path "$stage" | Out-Null;',
+              'robocopy "$env:SHARED_ROOT" "$stage\system" /E /XJ /R:1 /W:1 /MT:8 /NFL /NDL /NJH /NJS /NP *> $null;',
               '$global:LASTEXITCODE = 0;',
+              '',
+              'Log "Bước 3: Stage profile user (chỉ file <100MB, bỏ installer)...";',
               '$userProf = "$env:PROFILE_PATH";',
               'if (Test-Path "$userProf") {',
-              '    $profDst = [System.IO.Path]::Combine("$stage", "Users", "$env:RDP_USER");',
-              '    New-Item -ItemType Directory -Force -Path "$profDst" -ErrorAction SilentlyContinue | Out-Null;',
-              '    @("Desktop", "Documents", "Downloads", "Pictures") | ForEach-Object {',
-              '        $src = [System.IO.Path]::Combine($userProf, $_);',
-              '        $dst = [System.IO.Path]::Combine($profDst, $_);',
-              '        if (Test-Path $src) { robocopy $src $dst /E /XJ /R:1 /W:1 /NFL /NDL /NJH /NJS /NP *> $null; }',
-              '    };',
-              '};',
+              '    $profDst = "$stage\profile";',
+              '    New-Item -ItemType Directory -Force -Path "$profDst" | Out-Null;',
+              '    foreach ($fld in @("Desktop","Documents","Pictures")) {',
+              '        $src = Join-Path $userProf $fld;',
+              '        if (Test-Path $src) {',
+              '            robocopy $src "$profDst\$fld" /E /XJ /R:1 /W:1 /MT:8 /NFL /NDL /NJH /NJS /NP /XF *.exe *.msi *.zip *.7z *.iso *.vhdx *.vhd *.tmp *.log *> $null;',
+              '            $global:LASTEXITCODE = 0;',
+              '        }',
+              '    }',
+              '    $dlSrc = Join-Path $userProf "Downloads";',
+              '    if (Test-Path $dlSrc) {',
+              '        $dlDst = "$profDst\Downloads";',
+              '        New-Item -ItemType Directory -Force -Path $dlDst | Out-Null;',
+              '        Get-ChildItem $dlSrc -File -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 100MB -and $_.Extension -notmatch "^\.(exe|msi|zip|7z|iso|vhdx|vhd)$" } | ForEach-Object {',
+              '            try { Copy-Item $_.FullName -Destination $dlDst -Force -ErrorAction SilentlyContinue } catch {}',
+              '        }',
+              '    }',
+              '}',
+              '',
+              'Log "Bước 4: Nén siêu tốc (mức 1, đa luồng)...";',
               '$out7zDir = [System.IO.Path]::Combine("$env:RUNNER_TEMP", "save-7z");',
               'if (Test-Path "$out7zDir") { Remove-Item -Path "$out7zDir" -Recurse -Force -ErrorAction SilentlyContinue; }',
-              'New-Item -ItemType Directory -Force -Path "$out7zDir" -ErrorAction SilentlyContinue | Out-Null;',
-              '$outPrefix = [System.IO.Path]::Combine($out7zDir, "zenova-drive.7z");',
-              '& 7z a -t7z -m0=lzma2 -mx=1 -md=16m -mfb=32 -ms=on -mmt=on -v1900m "$outPrefix" "$stage\*" *>$null;',
-              '$chunks = Get-ChildItem -Path "$out7zDir" -Filter "zenova-drive.7z.*" | Sort-Object Name;',
-              'if ($chunks.Count -gt 0) {',
-              '    $manifest = [PSCustomObject]@{ machineId = "$env:MACHINE_ID"; savedAt = [DateTimeOffset]::UtcNow.ToString("o"); chunkCount = $chunks.Count; reason = $Reason; };',
-              '    $manifestPath = [System.IO.Path]::Combine($out7zDir, "drive-manifest.json");',
-              '    $manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding UTF8;',
-              '    $uploadArgs = @("release", "upload", "$env:RELEASE_TAG", "--repo", "$env:STORAGE_REPO", "--clobber", "$manifestPath");',
-              '    foreach ($c in $chunks) { $uploadArgs += $c.FullName; }',
-              '    & gh @uploadArgs 2>&1 | Out-Null;',
-              '    Write-Host "✅ Đã lưu xong $($chunks.Count) phân mảnh lên GitHub Release!" -ForegroundColor Green;',
-              '};',
+              'New-Item -ItemType Directory -Force -Path "$out7zDir" | Out-Null;',
+              '$outPrefix = Join-Path $out7zDir "zenova-drive.7z";',
+              '& 7z a -t7z -mx=1 -mmt=on -v1900m "$outPrefix" "$stage\*" *>$null;',
+              '$chunks = @(Get-ChildItem -Path "$out7zDir" -Filter "zenova-drive.7z.*" | Sort-Object Name);',
+              'if ($chunks.Count -eq 0) { Write-Host "❌ Nén thất bại!" -ForegroundColor Red; exit 1; }',
+              'Log "Đã nén $($chunks.Count) chunk.";',
+              '',
+              'Log "Bước 5: Upload lên GitHub Release...";',
+              '$manifest = [PSCustomObject]@{ machineId = "$env:MACHINE_ID"; savedAt = [DateTimeOffset]::UtcNow.ToString("o"); chunkCount = $chunks.Count; reason = $Reason };',
+              '$manifestPath = Join-Path $out7zDir "drive-manifest.json";',
+              '$manifest | ConvertTo-Json -Depth 5 | Set-Content -Path $manifestPath -Encoding UTF8;',
+              '$uploadArgs = @("release","upload","$env:RELEASE_TAG","--repo","$env:STORAGE_REPO","--clobber","$manifestPath");',
+              'foreach ($c in $chunks) { $uploadArgs += $c.FullName }',
+              '& gh @uploadArgs 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray };',
+              'if ($LASTEXITCODE -ne 0) { Write-Host "❌ Upload fail (exit $LASTEXITCODE)!" -ForegroundColor Red; exit 1; }',
+              '',
+              'Remove-Item -Path "$stage" -Recurse -Force -ErrorAction SilentlyContinue;',
+              'Remove-Item -Path "$out7zDir" -Recurse -Force -ErrorAction SilentlyContinue;',
+              'Write-Host "🎉 HOÀN TẤT trong $($sw.Elapsed.ToString("mm\:ss"))!" -ForegroundColor Green;',
               '$global:LASTEXITCODE = 0;'
           );
 
@@ -461,7 +474,6 @@ jobs:
           $global:LASTEXITCODE   = 0;
           Write-Host "⚙️ ĐANG CẤU HÌNH TÀI KHOẢN & TỐI ƯU HÓA INTEL XEON ZERO-LAG..." -ForegroundColor Yellow;
 
-          # 1. GIẢ LẬP CPU INTEL XEON PLATINUM
           try {
               $cpuName = "Intel(R) Xeon(R) Platinum 8380 CPU @ 2.30GHz"
               Set-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -Name "ProcessorNameString" -Value $cpuName -Force -ErrorAction SilentlyContinue;
@@ -469,7 +481,6 @@ jobs:
               Write-Host "│ ✅ Đã giả lập CPU: $cpuName" -ForegroundColor Green;
           } catch {}
 
-          # 2. TẮT BẢO VỆ BỘ NHỚ (HVCI) ĐỂ DRIVER ÂM THANH NẠP THÀNH CÔNG
           try {
               $dgPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity';
               New-Item -Path $dgPath -Force -ErrorAction SilentlyContinue | Out-Null;
@@ -478,7 +489,6 @@ jobs:
               Write-Host "│ ✅ Đã tắt HVCI!" -ForegroundColor Green;
           } catch {}
 
-          # 3. TẠO USER ZENOVA BẰNG NET USER (TRÁNH LỖI INVALIDPASSWORD)
           try {
               $secCfg = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'secpol.cfg');
               $secDb  = [System.IO.Path]::Combine("$env:RUNNER_TEMP", 'secpol.sdb');
@@ -521,7 +531,6 @@ jobs:
           Set-ItemProperty -Path $winlogon -Name 'DefaultUserName' -Value $user -Force -ErrorAction SilentlyContinue;
           Set-ItemProperty -Path $winlogon -Name 'DefaultPassword' -Value $pass -Force -ErrorAction SilentlyContinue;
 
-          # 4. TỐI ƯU HÓA ĐẶC TRỊ (UNPARK CORE, BBR, TẮT NAGLE DELAY)
           Write-Host "🚀 Đang tối ưu CPU Xeon & Khử Delay Mạng..." -ForegroundColor Cyan;
 
           $ptPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling';
@@ -553,7 +562,6 @@ jobs:
 
           tzutil /s 'SE Asia Standard Time' 2>$null;
 
-          # Fix Delay Mạng (Tắt Nagle's Algorithm)
           try {
               $interfaces = Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" -ErrorAction SilentlyContinue
               foreach ($i in $interfaces) {
@@ -728,7 +736,7 @@ jobs:
               }
           } catch {}
 
-          # 2. CÀI ĐẶT VB-CABLE AUDIO (FIX TRIỆT ĐỂ)
+          # 2. CÀI ĐẶT VB-CABLE AUDIO
           Write-Host "│ 🔊 Đang cài đặt VB-Cable Audio Driver..." -ForegroundColor Cyan;
           foreach ($svcName in @('Audiosrv', 'AudioEndpointBuilder', 'MMCSS')) {
               try {
@@ -773,7 +781,7 @@ jobs:
               try { Restart-Service -Name $svcName -Force -ErrorAction SilentlyContinue; } catch {}
           }
 
-          # 3. APOLLO STREAMING (Thay thế Sunshine)
+          # 3. APOLLO STREAMING
           Write-Host "│ 🚀 Cấu hình Apollo Streaming & Mở Firewall..." -ForegroundColor Cyan;
           try {
               $apMsi = "$env:TEMP\Apollo.msi";
@@ -981,82 +989,136 @@ jobs:
           $global:LASTEXITCODE = 0;
           exit 0;
 
-      - name: 🔑 Cấu hình PIN StarDesk Trung & Lấy Device ID Lập tức
+      - name: 🔑 Lấy StarDesk Trung Device ID (đa phương pháp, chờ tối đa 60s)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue';
-          $global:LASTEXITCODE   = 0;
-          Write-Host "🔍 Đang trích xuất ID StarDesk Trung / GameViewer..." -ForegroundColor Cyan;
-          
-          $gvCli = 'C:\Program Files\Netease\GameViewer\bin\uuyc-cli.exe';
-          $sdId = "$env:STARDESK_ID_INPUT";
+          $global:LASTEXITCODE = 0;
+          Write-Host "🔍 Đang lấy ID StarDesk Trung / GameViewer..." -ForegroundColor Cyan;
+
           $sdPin = "$env:INPUT_PIN_CODE";
-          if ([string]::IsNullOrWhiteSpace("$sdPin")) { $sdPin = "Zenova2026"; }
-          $cleanPin = ($sdPin -replace '[^A-Za-z0-9]', '');
-          if (($cleanPin.Length -lt 8) -or ($cleanPin.Length -gt 16)) { $cleanPin = 'Zenova2026'; }
+          if ([string]::IsNullOrWhiteSpace("$sdPin")) { $sdPin = "Zenova2026" }
+          $cleanPin = ($sdPin -replace '[^A-Za-z0-9]', '')
+          if (($cleanPin.Length -lt 8) -or ($cleanPin.Length -gt 16)) { $cleanPin = 'Zenova2026' }
+          Set-Content -Path "C:\stardesk-pin.txt" -Value $cleanPin -Force
 
-          # Ép chạy StarDesk.exe ngầm
-          $sdExe = (Get-ChildItem -Path @("C:\Program Files\StarDesk", "C:\Program Files (x86)\StarDesk") -Filter "StarDesk.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName;
-          if ($sdExe) {
-              Start-Process -FilePath "$sdExe" -WorkingDirectory (Split-Path $sdExe) -WindowStyle Hidden -ErrorAction SilentlyContinue;
-              Write-Host "│ ✅ Đã khởi chạy StarDesk.exe, chờ lấy ID..." -ForegroundColor Green;
-              Start-Sleep -Seconds 20; # Tăng thời gian chờ lên 20s để app kịp kết nối máy chủ Trung Quốc
-              Stop-Process -Name "StarDesk" -Force -ErrorAction SilentlyContinue; # Tắt app để tránh chiếm file
+          $sdId = ""
+          if ("$env:STARDESK_ID_INPUT" -match '^\d{6,12}$') {
+              $sdId = "$env:STARDESK_ID_INPUT"
+              Write-Host "│ ✅ Dùng ID từ input: $sdId" -ForegroundColor Green
           }
 
-          # 1. Thử lấy từ GameViewer CLI
-          if (Test-Path "$gvCli") {
-              & "$gvCli" -c "$cleanPin" *> $null;
-              if ([string]::IsNullOrWhiteSpace("$sdId")) {
-                  for ($i = 0; $i -lt 15; $i++) {
-                      $cliOut = & "$gvCli" -d 2>$null;
-                      if ($cliOut -match '(\d{6,12})') { $sdId = $Matches[1]; break; }
-                      Start-Sleep -Seconds 1;
-                  }
-              }
-          }
+          # Phương pháp 1: Chạy StarDesk.exe và chờ nó tự lưu config
+          if (-not $sdId) {
+              $sdExe = (Get-ChildItem -Path @("C:\Program Files\StarDesk", "C:\Program Files (x86)\StarDesk") -Filter "StarDesk.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+              if ($sdExe) {
+                  Write-Host "│ 🚀 Khởi chạy StarDesk.exe để nó kết nối server TQ..." -ForegroundColor Cyan
+                  $proc = Start-Process -FilePath "$sdExe" -WorkingDirectory (Split-Path $sdExe) -WindowStyle Minimized -PassThru -ErrorAction SilentlyContinue
+                  $startTime = Get-Date
+                  $idRegex = '(?:ID|cid|DeviceID|Account|device_id|deviceId|DeviceId)\s*[":=]\s*["'']?(\d{6,12})'
 
-          # 2. Quét sâu vào mọi file config của StarDesk
-          $cfgList = @(
-              "C:\Program Files (x86)\StarDesk\config.ini",
-              "C:\Program Files\StarDesk\config.ini",
-              "C:\ProgramData\StarDesk\config.ini",
-              "C:\ProgramData\StarDesk\config.dat",
-              "C:\Users\zenova\AppData\Roaming\StarDesk\config.ini",
-              "C:\Users\runneradmin\AppData\Roaming\StarDesk\config.ini",
-              "C:\Users\zenova\AppData\Local\StarDesk\config.ini",
-              "C:\Users\runneradmin\AppData\Local\StarDesk\config.ini"
-          );
-          if ([string]::IsNullOrWhiteSpace("$sdId") -or ($sdId -match 'chưa|đang|Đang')) {
-              for ($i = 0; $i -lt 20; $i++) {
-                  foreach ($cfg in $cfgList) {
-                      if (Test-Path $cfg) {
-                          $content = Get-Content $cfg -Raw -ErrorAction SilentlyContinue;
-                          if ($content -match '(?:ID|cid|DeviceID|Account|Username)\s*=\s*(\d{6,12})') {
-                              $sdId = $Matches[1]; break;
+                  $allCfg = @(
+                      "C:\ProgramData\StarDesk\config.ini",
+                      "C:\ProgramData\StarDesk\config.dat",
+                      "C:\ProgramData\StarDesk\user.dat",
+                      "C:\ProgramData\StarDesk\data.ini",
+                      "C:\Program Files\StarDesk\config.ini",
+                      "C:\Program Files (x86)\StarDesk\config.ini",
+                      "C:\Users\zenova\AppData\Roaming\StarDesk\config.ini",
+                      "C:\Users\zenova\AppData\Roaming\StarDesk\user.dat",
+                      "C:\Users\zenova\AppData\Local\StarDesk\config.ini",
+                      "C:\Users\runneradmin\AppData\Roaming\StarDesk\config.ini",
+                      "C:\Users\runneradmin\AppData\Local\StarDesk\config.ini"
+                  )
+
+                  for ($i = 0; $i -lt 20; $i++) {
+                      Start-Sleep -Seconds 3
+                      $elapsed = [int]((Get-Date) - $startTime).TotalSeconds
+
+                      foreach ($cfg in $allCfg) {
+                          if (Test-Path $cfg) {
+                              try {
+                                  $content = Get-Content $cfg -Raw -ErrorAction SilentlyContinue
+                                  if ($content -match $idRegex) {
+                                      $sdId = $Matches[1]
+                                      break
+                                  }
+                              } catch {}
                           }
                       }
+                      if ($sdId) { break }
+
+                      $scanDirs = @("C:\ProgramData\StarDesk", "C:\Users\zenova\AppData\Roaming\StarDesk", "C:\Users\zenova\AppData\Local\StarDesk")
+                      foreach ($dir in $scanDirs) {
+                          if (Test-Path $dir) {
+                              $files = Get-ChildItem $dir -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 1MB -and $_.Extension -match '^\.(ini|dat|json|xml|conf|cfg|txt)$' }
+                              foreach ($f in $files) {
+                                  try {
+                                      $txt = Get-Content $f.FullName -Raw -ErrorAction SilentlyContinue
+                                      if ($txt -match $idRegex) {
+                                          $sdId = $Matches[1]; break
+                                      }
+                                  } catch {}
+                              }
+                              if ($sdId) { break }
+                          }
+                      }
+                      if ($sdId) {
+                          Write-Host "│ ✅ Tìm thấy ID sau $elapsed giây: $sdId" -ForegroundColor Green
+                          break
+                      }
+                      Write-Host "│ ⏳ Chờ StarDesk đăng nhập... ($elapsed/60 giây)" -ForegroundColor DarkGray
                   }
-                  if ($sdId -match '^\d+$') { break; }
-                  Start-Sleep -Seconds 1;
+                  # Không kill app - để nó chạy, user có thể kết nối ngay
               }
           }
 
-          if ([string]::IsNullOrWhiteSpace("$sdId")) {
-              $sdId = "Không tìm thấy ID (Vui lòng vào app xem thủ công)"
+          # Phương pháp 2: GameViewer CLI nếu có
+          if (-not $sdId) {
+              $gvCli = 'C:\Program Files\Netease\GameViewer\bin\uuyc-cli.exe'
+              if (Test-Path $gvCli) {
+                  Write-Host "│ 🔄 Thử GameViewer CLI..." -ForegroundColor Cyan
+                  & "$gvCli" -c "$cleanPin" *> $null
+                  for ($i = 0; $i -lt 10; $i++) {
+                      $out = & "$gvCli" -d 2>$null
+                      if ($out -match '(\d{6,12})') { $sdId = $Matches[1]; break }
+                      Start-Sleep -Seconds 1
+                  }
+              }
           }
 
-          Set-Content -Path "C:\stardesk-id.txt" -Value "$sdId" -Force;
-          Set-Content -Path "C:\stardesk-pin.txt" -Value "$cleanPin" -Force;
+          # Phương pháp 3: Quét Registry
+          if (-not $sdId) {
+              $regPaths = @(
+                  'HKCU:\Software\StarDesk',
+                  'HKLM:\Software\StarDesk',
+                  'HKCU:\Software\WOW6432Node\StarDesk',
+                  'HKLM:\Software\WOW6432Node\StarDesk'
+              )
+              foreach ($rp in $regPaths) {
+                  if (Test-Path $rp) {
+                      $props = Get-ItemProperty -Path $rp -ErrorAction SilentlyContinue
+                      foreach ($p in $props.PSObject.Properties) {
+                          if ($p.Value -match '^\d{6,12}$') { $sdId = $p.Value; break }
+                      }
+                      if ($sdId) { break }
+                  }
+              }
+          }
 
-          "STARDESK_ID=$sdId" >> "$env:GITHUB_ENV";
-          "STARDESK_PIN=$cleanPin" >> "$env:GITHUB_ENV";
+          if ($sdId) {
+              Set-Content -Path "C:\stardesk-id.txt" -Value "$sdId" -Force
+              "STARDESK_ID=$sdId" >> "$env:GITHUB_ENV"
+              Write-Host "│ 🌟 StarDesk ID : $sdId" -ForegroundColor Yellow
+          } else {
+              Set-Content -Path "C:\stardesk-id.txt" -Value "Đang kết nối - vào app xem ID" -Force
+              Write-Host "│ ⚠️ Chưa lấy được ID. App đang chạy, sẽ tiếp tục thử ở keep-alive." -ForegroundColor Yellow
+          }
+          "STARDESK_PIN=$cleanPin" >> "$env:GITHUB_ENV"
+          Write-Host "│ 🔑 StarDesk PIN: $cleanPin" -ForegroundColor Yellow
 
-          Write-Host "│ 🌟 StarDesk ID : $sdId" -ForegroundColor Yellow;
-          Write-Host "│ 🔑 StarDesk PIN: $cleanPin" -ForegroundColor Yellow;
-
-          $global:LASTEXITCODE = 0;
-          exit 0;
+          $global:LASTEXITCODE = 0
+          exit 0
 
       - name: 🖥️ Tạo các phím tắt tiện ích trên Desktop
         shell: pwsh
@@ -1249,7 +1311,7 @@ jobs:
           [void]$sb.AppendLine('---');
           [void]$sb.AppendLine('');
           [void]$sb.AppendLine('### 📦 4. Ứng Dụng Đã Tải Sẵn Trong `C:\Apps` và `Downloads`');
-          [void]$sb.AppendLine('- **Downloads / Apps**: Antigravity, AutoClicker, CloudCord, Microsoft Store, Minecraft Wallpaper, VS Code, Windhawk, Bloxstrap 120 FPS, PrismLauncher, Spotify, Bandicam, EVKey.');
+          [void]$sb.AppendLine('- **Downloads / Apps**: AutoClicker, CloudCord, Microsoft Store, Minecraft Wallpaper, VS Code, Windhawk, Bloxstrap 120 FPS, PrismLauncher, Spotify, Bandicam, EVKey.');
           Set-Content -Path $env:GITHUB_STEP_SUMMARY -Value ($sb.ToString()) -Encoding UTF8;
 
           [Console]::WriteLine("::notice title=THÔNG TIN KẾT NỐI ZENOVA VPS::StarDesk ID: $sdId | PIN: $sdPin | Apollo: $publicApollo | RDP: $rdpTarget | Web: $publicWeb");
@@ -1307,14 +1369,35 @@ jobs:
           $global:LASTEXITCODE = 0;
           exit 0;
 
-      - name: 💾 Lưu dữ liệu cuối phiên
+      - name: 💾 Lưu dữ liệu cuối phiên (có timeout 20 phút)
         if: always()
         shell: pwsh
+        timeout-minutes: 20
         run: |
           $ErrorActionPreference = 'Continue';
-          $global:LASTEXITCODE   = 0;
+          $global:LASTEXITCODE = 0;
           $saveScript = "$env:SAVE_SCRIPT_PATH";
-          if (Test-Path "$saveScript") { & "$saveScript" -Reason 'final-session-save'; }
+          if (-not (Test-Path "$saveScript")) {
+              Write-Host "⚠️ Không có save script → bỏ qua." -ForegroundColor Yellow;
+              exit 0
+          }
+          Write-Host "⏱️ Bắt đầu lưu, tối đa 20 phút..." -ForegroundColor Cyan
+          $job = Start-Job -ScriptBlock {
+              param($sp)
+              & $sp -Reason 'final-session-save'
+          } -ArgumentList $saveScript
+
+          $finished = Wait-Job -Job $job -Timeout 1200
+          if (-not $finished) {
+              Write-Host "⚠️ Lưu quá 20 phút → HỦY để không treo phiên!" -ForegroundColor Yellow
+              Stop-Job -Job $job -ErrorAction SilentlyContinue
+              Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+              Write-Host "⚠️ Đã hủy lưu. Phiên tiếp theo vẫn được kích hoạt bình thường." -ForegroundColor Yellow
+              exit 0
+          }
+          Receive-Job -Job $job -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ -ForegroundColor DarkGray }
+          Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+          Write-Host "✅ Hoàn tất lưu." -ForegroundColor Green
           $global:LASTEXITCODE = 0;
           exit 0;
 
